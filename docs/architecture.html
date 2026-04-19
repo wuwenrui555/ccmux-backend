@@ -208,6 +208,10 @@ class Backend(Protocol):
     <h4>InteractiveUIContent</h4>
     <p>Nested in <code>WindowStatus</code>. Fields: <code>content</code>, <code>name</code> (the matched pattern label).</p>
   </div>
+  <div class="card">
+    <h4>UsageInfo</h4>
+    <p>Returned by <code>parse_usage_output()</code>. Field: <code>parsed_lines</code> — cleaned content of the <code>/usage</code> modal.</p>
+  </div>
 </div>
 
 <h3>Query / listing types</h3>
@@ -239,9 +243,9 @@ class Backend(Protocol):
 <h3>Composition</h3>
 <ul>
   <li><code>DefaultBackend(tmux_registry, window_bindings, ...)</code> — the built-in implementation; frontend constructs it in its own <code>main.py</code></li>
-  <li><code>tmux_registry</code> — process-wide <code>TmuxSessionRegistry</code> singleton</li>
-  <li><code>TmuxSessionRegistry</code> / <code>WindowRegistry</code> — exposed for composition</li>
-  <li><code>get_default_backend()</code> / <code>set_default_backend(b)</code> — for call sites that can't thread a backend handle through (e.g. Telegram handlers)</li>
+  <li><code>tmux_registry</code> — process-wide <code>TmuxSessionRegistry</code> singleton (convenience default)</li>
+  <li><code>TmuxSessionRegistry</code> / <code>WindowBindings</code> — exposed for composition</li>
+  <li><code>get_default_backend()</code> / <code>set_default_backend(b)</code> — for call sites that can't thread a backend handle through</li>
   <li><code>sanitize_session_name(name, existing)</code> — make a string a legal tmux session name</li>
 </ul>
 
@@ -249,10 +253,11 @@ class Backend(Protocol):
 <p>Not importable by frontends (the <code>test_api_boundary.py</code> tripwire rejects submodule imports).</p>
 <table>
   <tr><th>Module</th><th>Owns</th></tr>
-  <tr><td><code>tmux.py</code></td><td><code>TmuxSession</code> (per-session libtmux wrapper), placeholder-free session creation</td></tr>
-  <tr><td><code>window_registry.py</code></td><td><code>_session_map</code>, liveness map <code>_window_alive</code>, <code>verify_all()</code> slow-loop, auto-resume for dead Claude sessions</td></tr>
+  <tr><td><code>tmux.py</code></td><td><code>TmuxSession</code> (per-session libtmux wrapper), <code>TmuxSessionRegistry</code>, placeholder-free session creation</td></tr>
+  <tr><td><code>window_bindings.py</code></td><td><code>WindowBindings</code> — persistent <code>window_id ↔ (session_id, cwd)</code> map backed by <code>window_bindings.json</code></td></tr>
+  <tr><td><code>liveness.py</code></td><td><code>LivenessChecker</code> — <code>verify_all()</code> slow-loop probing pane foreground process; auto-resume dead Claude</td></tr>
   <tr><td><code>message_monitor.py</code></td><td>Byte-offset incremental JSONL reader, mtime cache, <code>MonitorState</code> persistence, pending-tools map</td></tr>
-  <tr><td><code>status_monitor.py</code></td><td>Iterates <code>WindowRegistry</code>, captures every bound pane, emits raw <code>WindowStatus</code></td></tr>
+  <tr><td><code>status_monitor.py</code></td><td>Iterates <code>WindowBindings</code>, captures every bound pane, emits raw <code>WindowStatus</code></td></tr>
   <tr><td><code>tmux_pane_parser.py</code></td><td>UI pattern regexes, status-line parser, pattern-drift warning</td></tr>
   <tr><td><code>claude_transcript_parser.py</code></td><td>Low-level JSONL parsing, <code>PendingToolInfo</code>, tool-pair stitching</td></tr>
   <tr><td><code>backend.py</code></td><td>Protocol definition + <code>DefaultBackend</code> with fast / slow poll loops</td></tr>
@@ -297,7 +302,7 @@ Frontend consumer routes by session_id / window_id</div>
 <h3>Terminal pane → consumer (status)</h3>
 <div class="flow">Fast poll tick (every ~0.5s)
   <span class="arrow">↓</span>
-StatusMonitor iterates WindowRegistry.all()
+StatusMonitor iterates WindowBindings.all()
   <span class="arrow">↓</span>
 For each window_id: tm.capture_pane() + terminal parsers
   <span class="arrow">↓</span>
@@ -310,7 +315,7 @@ on_status(WindowStatus) fires; frontend resolves routing</div>
   <span class="arrow">↓</span>
 backend.tmux.send_text(window_id, text)
   <span class="arrow">↓</span>
-WindowRegistry.send_to_window delegates to TmuxSession
+TmuxSessionRegistry routes window_id → TmuxSession
   <span class="arrow">↓</span>
 TmuxSession.send_keys writes to the pane; Claude reads it</div>
 
@@ -325,7 +330,7 @@ Backend slow loop reloads the map; verify_all() picks up the new window</div>
 
 <h2>What <code>ccmux</code> is <em>not</em></h2>
 <ul>
-  <li><strong>Not a bot.</strong> No Telegram, Slack, HTTP, or WebSocket code. No message rendering, no markdown, no rate limiting.</li>
+  <li><strong>Not a bot.</strong> No Telegram, Slack, HTTP, or WebSocket code. Output is plain CommonMark Markdown (including <code>&gt;</code> blockquotes for collapsible regions) — it does not speak MarkdownV2, HTML, or any platform-specific dialect.</li>
   <li><strong>Not stateful across topics / users / threads.</strong> All identity is <code>window_id</code> / <code>session_id</code>. If a frontend wants "whose turn is this", that's the frontend's problem.</li>
   <li><strong>Not a transport layer.</strong> It doesn't know how <code>on_message</code> / <code>on_status</code> get delivered — they're plain Python callbacks.</li>
   <li><strong>Not configurable by caller.</strong> No pluggable parsers, no strategy patterns. Swap the whole <code>Backend</code> implementation if you need different semantics.</li>
