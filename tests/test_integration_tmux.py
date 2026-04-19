@@ -78,9 +78,7 @@ def test_create_session_and_list_windows(registry, session_name, tmp_path):
 def test_registered_session_names_after_create(registry, session_name, tmp_path):
     """registered_session_names() reflects sessions added through the registry."""
     tm = registry.get_or_create(session_name)
-    asyncio.run(
-        tm.create_session(work_dir=str(tmp_path), start_claude=False)
-    )
+    asyncio.run(tm.create_session(work_dir=str(tmp_path), start_claude=False))
 
     assert session_name in registry.registered_session_names()
     assert session_name in registry.all_server_session_names()

@@ -465,7 +465,7 @@ class TmuxSession:
                 wid = window.window_id or ""
 
                 # Prevent Claude Code from overriding window name
-                window.set_window_option("allow-rename", "off")
+                window.set_option("allow-rename", "off")
 
                 # Start Claude Code if requested
                 if start_claude:
@@ -532,7 +532,7 @@ class TmuxSession:
 
                 window = session.windows[0]
                 wid = window.window_id or ""
-                window.set_window_option("allow-rename", "off")
+                window.set_option("allow-rename", "off")
 
                 if start_claude:
                     pane = window.active_pane
