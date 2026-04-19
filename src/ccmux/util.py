@@ -1,7 +1,7 @@
 """Shared utility helpers.
 
 Kept deliberately small: path resolution for the ccmux config dir,
-crash-safe JSON writes, and a tmux_claude_map lookup helper.
+crash-safe JSON writes, and a `window_bindings.json` lookup helper.
 """
 
 import json

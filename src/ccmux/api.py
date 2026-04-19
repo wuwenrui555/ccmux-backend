@@ -29,7 +29,7 @@ from .backend import (
 # Event payloads (pushed to on_message / on_status callbacks)
 from .claude_transcript_parser import ClaudeMessage
 from .status_monitor import WindowStatus
-from .tmux_pane_parser import InteractiveUIContent
+from .tmux_pane_parser import InteractiveUIContent, UsageInfo
 
 # Query returns (from Protocol method calls)
 from .window_bindings import WindowBinding, ClaudeSession
@@ -66,6 +66,7 @@ __all__ = [
     "ClaudeMessage",
     "WindowStatus",
     "InteractiveUIContent",
+    "UsageInfo",
     # Query returns
     "WindowBinding",
     "ClaudeSession",

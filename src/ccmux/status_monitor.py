@@ -22,9 +22,9 @@ from .tmux_pane_parser import (
     extract_interactive_content,
     parse_status_line,
 )
-from .tmux import tmux_registry
 
 if TYPE_CHECKING:
+    from .tmux import TmuxSessionRegistry
     from .window_bindings import WindowBinding, WindowBindings
 
 logger = logging.getLogger(__name__)
@@ -56,17 +56,23 @@ class StatusMonitor:
     result list to consumers for presentation.
     """
 
-    def __init__(self, window_bindings: "WindowBindings | None" = None) -> None:
+    def __init__(
+        self,
+        window_bindings: "WindowBindings | None" = None,
+        tmux_registry: "TmuxSessionRegistry | None" = None,
+    ) -> None:
         self._window_bindings = window_bindings
+        self._tmux_registry = tmux_registry
 
     async def poll(self) -> list[WindowStatus]:
         """Observe every known Claude window's terminal state.
 
         Returns one entry per window_id present in the injected
-        `WindowBindings`. Returns empty list if no registry is injected.
+        `WindowBindings`. Returns empty list if no bindings or tmux
+        registry were injected.
         """
         results: list[WindowStatus] = []
-        if self._window_bindings is None:
+        if self._window_bindings is None or self._tmux_registry is None:
             return results
 
         for info in list(self._window_bindings.all()):
@@ -83,6 +89,7 @@ class StatusMonitor:
         return results
 
     async def _observe(self, info: "WindowBinding") -> WindowStatus:
+        assert self._tmux_registry is not None
         wid = info.window_id
 
         def make(
@@ -100,7 +107,7 @@ class StatusMonitor:
                 interactive_ui=interactive_ui,
             )
 
-        tm = tmux_registry.get_by_window_id(wid)
+        tm = self._tmux_registry.get_by_window_id(wid)
         if not tm:
             return make(window_exists=False, pane_captured=False)
         w = await tm.find_window_by_id(wid)

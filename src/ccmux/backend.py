@@ -209,7 +209,7 @@ class DefaultBackend:
     poll MessageMonitor + StatusMonitor in parallel, fan out events through
     `on_message` and `on_status`.
 
-    Internal slow loop (60 s): run `WindowRegistry.verify_all()` to reconcile
+    Internal slow loop (60 s): run `LivenessChecker.verify_all()` to reconcile
     tmux/Claude liveness and auto-resume dead Claude sessions.
     """
 
@@ -220,16 +220,19 @@ class DefaultBackend:
         message_monitor: MessageMonitor | None = None,
         status_monitor: StatusMonitor | None = None,
         slow_interval: float = 60.0,
+        show_user_messages: bool | None = None,
     ) -> None:
         self._tmux_registry = tmux_registry
         self._window_bindings = window_bindings
-        self._liveness = LivenessChecker(window_bindings)
+        self._liveness = LivenessChecker(window_bindings, tmux_registry)
         self._files = ClaudeFileResolver(window_bindings)
         self._message_monitor = message_monitor or MessageMonitor(
-            window_bindings=window_bindings
+            window_bindings=window_bindings,
+            show_user_messages=show_user_messages,
         )
         self._status_monitor = status_monitor or StatusMonitor(
-            window_bindings=window_bindings
+            window_bindings=window_bindings,
+            tmux_registry=tmux_registry,
         )
         self._slow_interval = slow_interval
         self._fast_task: asyncio.Task[None] | None = None
