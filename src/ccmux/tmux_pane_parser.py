@@ -385,14 +385,33 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # Spinner characters Claude Code uses in its status line
 STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 
+# Overlay lines that may sit between the real spinner and the chrome.
+# These are transient Claude Code modals — e.g. the "How is Claude doing
+# this session?" rating prompt — that must not short-circuit spinner
+# detection. Scan-upward skips any line matching one of these patterns
+# and continues looking for the spinner above.
+_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Session-rating modal (CC 2.1.x+).
+    re.compile(r"^\s*●\s*How is Claude doing this session\?"),
+    re.compile(r"^\s*1:\s*Bad\b"),
+)
+
+# Upper bound on how far above the chrome separator the real spinner can
+# sit once overlays are in the way. Generous enough to tolerate 2–3
+# lines of modal plus blank gaps.
+_STATUS_SCAN_WINDOW = 10
+
 
 def parse_status_line(pane_text: str) -> str | None:
     """Extract the Claude Code status line from terminal output.
 
-    The status line (spinner + working text) appears immediately above
-    the chrome separator (a full line of `─` characters).  We locate
-    the separator first, then check the line just above it — this avoids
-    false positives from `·` bullets in Claude's regular output.
+    The status line (spinner + working text) lives above the chrome
+    separator (a full line of `─` characters). We locate the separator
+    first, then scan upward — skipping blank lines and recognised
+    overlay modals (e.g. the session-rating prompt) — until we either
+    find a spinner or exhaust the scan window. Bailing only on a
+    non-spinner, non-overlay line keeps `·` bullets in regular output
+    from producing false positives.
 
     Returns the text after the spinner, or None if no status line found.
     """
@@ -405,15 +424,15 @@ def parse_status_line(pane_text: str) -> str | None:
     if chrome_idx is None:
         return None
 
-    # Scan up to 4 lines above the chrome separator to skip over blank
-    # lines between chrome and spinner. The first non-empty line decides:
-    # if it starts with a spinner, return the rest; otherwise bail.
-    for i in range(chrome_idx - 1, max(chrome_idx - 5, -1), -1):
-        line = lines[i].strip()
-        if not line:
+    for i in range(chrome_idx - 1, max(chrome_idx - 1 - _STATUS_SCAN_WINDOW, -1), -1):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
             continue
-        if line[0] in STATUS_SPINNERS:
-            return line[1:].strip()
+        if any(p.search(line) for p in _SKIPPABLE_OVERLAY_PATTERNS):
+            continue
+        if stripped[0] in STATUS_SPINNERS:
+            return stripped[1:].strip()
         return None
     return None
 

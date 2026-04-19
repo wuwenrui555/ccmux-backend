@@ -62,6 +62,27 @@ class TestParseStatusLine:
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
 
+    def test_rating_modal_does_not_hide_spinner(self, chrome: str):
+        """When CC's "How is Claude doing this session?" modal appears
+        between the real spinner and chrome, the spinner must still be
+        detected — skipping the modal lines, not bailing on them."""
+        pane = (
+            "some output\n"
+            "✽ Osmosing… (33s · ↑ 188 tokens)\n"
+            "\n"
+            "● How is Claude doing this session? (optional)\n"
+            "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == "Osmosing… (33s · ↑ 188 tokens)"
+
+    def test_unknown_overlay_still_bails(self, chrome: str):
+        """A non-spinner, non-overlay line between spinner and chrome
+        still short-circuits — we don't want to silently swallow future
+        UI additions and return stale spinners."""
+        pane = f"✽ Old spinner\nSome unknown modal line\n{chrome}"
+        assert parse_status_line(pane) is None
+
 
 # ── extract_interactive_content ──────────────────────────────────────────
 
