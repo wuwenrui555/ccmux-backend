@@ -7,8 +7,10 @@ from ccmux.claude_transcript_parser import (
     TranscriptParser,
 )
 
-EXPQUOTE_START = TranscriptParser.EXPANDABLE_QUOTE_START
-EXPQUOTE_END = TranscriptParser.EXPANDABLE_QUOTE_END
+# Standard Markdown blockquote marker. Every line of a blockquoted region
+# starts with "> "; the parser emits this shape and any frontend can
+# detect it to render a collapsible UI.
+BLOCKQUOTE_LINE_PREFIX = "> "
 
 
 # ── parse_line ───────────────────────────────────────────────────────────
@@ -272,32 +274,30 @@ class TestFormatToolResultText:
                 "output line",
                 "Bash",
                 lambda r: (
-                    r.startswith("  ⎿  Output 1 lines")
-                    and EXPQUOTE_START in r
-                    and EXPQUOTE_END in r
+                    r.startswith("  ⎿  Output 1 lines") and BLOCKQUOTE_LINE_PREFIX in r
                 ),
             ),
             (
                 "file1.py\nfile2.py\n",
                 "Grep",
-                lambda r: "Found 2 matches" in r and EXPQUOTE_START in r,
+                lambda r: "Found 2 matches" in r and BLOCKQUOTE_LINE_PREFIX in r,
             ),
             (
                 "a.py\nb.py\nc.py",
                 "Glob",
-                lambda r: "Found 3 files" in r and EXPQUOTE_START in r,
+                lambda r: "Found 3 files" in r and BLOCKQUOTE_LINE_PREFIX in r,
             ),
             (
                 "agent says hello",
                 "Task",
-                lambda r: "Agent output 1 lines" in r and EXPQUOTE_START in r,
+                lambda r: "Agent output 1 lines" in r and BLOCKQUOTE_LINE_PREFIX in r,
             ),
             (
                 "page content here",
                 "WebFetch",
                 lambda r: (
                     f"Fetched {len('page content here')} characters" in r
-                    and EXPQUOTE_START in r
+                    and BLOCKQUOTE_LINE_PREFIX in r
                 ),
             ),
             (
@@ -374,8 +374,7 @@ class TestParseEntries:
         )
         assert len(result) == 1
         assert result[0].content_type == "thinking"
-        assert EXPQUOTE_START in result[0].text
-        assert EXPQUOTE_END in result[0].text
+        assert BLOCKQUOTE_LINE_PREFIX in result[0].text
         assert "reasoning here" in result[0].text
 
     def test_local_command_with_stdout(self, make_jsonl_entry, make_text_block):
@@ -471,7 +470,7 @@ class TestParseEntries:
         tr = tool_result_entries[0]
         assert "Added" in tr.text
         assert "removed" in tr.text
-        assert EXPQUOTE_START in tr.text
+        assert BLOCKQUOTE_LINE_PREFIX in tr.text
 
     def test_error_tool_result(
         self,

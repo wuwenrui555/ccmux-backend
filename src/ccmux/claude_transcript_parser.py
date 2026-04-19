@@ -61,7 +61,7 @@ class ParsedMessage:
 
     Narrower than ClaudeMessage: represents the raw role+text of a single JSONL
     line before display formatting. Used only inside TranscriptParser and by
-    `WindowRegistry`'s session-summary reader.
+    `ClaudeFileResolver`'s session-summary reader.
     """
 
     message_type: Literal["user", "assistant", "local_command", "local_command_invoke"]
@@ -140,8 +140,8 @@ class TranscriptParser:
     def extract_text_only(content_list: list[Any]) -> str:
         """Extract only text content from structured content.
 
-        This is used for Telegram notifications where we only want
-        the actual text response, not tool calls or thinking.
+        Strips tool_use / tool_result / thinking blocks; returns the
+        concatenated text blocks as a single string.
 
         Parameters
         ----------
@@ -373,18 +373,17 @@ class TranscriptParser:
         """Extract timestamp from message data."""
         return data.get("timestamp")
 
-    EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
-    EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
+    @staticmethod
+    def _format_blockquote(text: str) -> str:
+        """Format text as a standard Markdown blockquote.
 
-    @classmethod
-    def _format_expandable_quote(cls, text: str) -> str:
-        """Format text as a Telegram expandable blockquote.
-
-        Wraps text with sentinel markers. The actual MarkdownV2 formatting
-        (> prefix, || suffix, escaping) is done in convert_markdown() after
-        telegramify processes the surrounding content.
+        Prefixes every line with "> " so the output is valid CommonMark
+        that any frontend can render. Frontends that want a collapsible
+        UI (e.g. Telegram expandable blockquote) detect the `> ` lines
+        and render them accordingly; plain-text consumers see readable
+        quoted lines.
         """
-        return f"{cls.EXPANDABLE_QUOTE_START}{text}{cls.EXPANDABLE_QUOTE_END}"
+        return "\n".join(f"> {line}" if line else ">" for line in text.split("\n"))
 
     @classmethod
     def _format_tool_result_text(cls, text: str, tool_name: str | None = None) -> str:
@@ -414,42 +413,42 @@ class TranscriptParser:
             # Bash: show output line count
             if line_count > 0:
                 stats = f"  ⎿  Output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
+                return stats + "\n" + cls._format_blockquote(text)
+            return cls._format_blockquote(text)
 
         elif tool_name == "Grep":
             # Grep: show match count (count non-empty lines)
             matches = len([line for line in text.split("\n") if line.strip()])
             stats = f"  ⎿  Found {matches} matches"
-            return stats + "\n" + cls._format_expandable_quote(text)
+            return stats + "\n" + cls._format_blockquote(text)
 
         elif tool_name == "Glob":
             # Glob: show file count
             files = len([line for line in text.split("\n") if line.strip()])
             stats = f"  ⎿  Found {files} files"
-            return stats + "\n" + cls._format_expandable_quote(text)
+            return stats + "\n" + cls._format_blockquote(text)
 
         elif tool_name == "Task":
             # Task: show output length
             if line_count > 0:
                 stats = f"  ⎿  Agent output {line_count} lines"
-                return stats + "\n" + cls._format_expandable_quote(text)
-            return cls._format_expandable_quote(text)
+                return stats + "\n" + cls._format_blockquote(text)
+            return cls._format_blockquote(text)
 
         elif tool_name == "WebFetch":
             # WebFetch: show content length
             char_count = len(text)
             stats = f"  ⎿  Fetched {char_count} characters"
-            return stats + "\n" + cls._format_expandable_quote(text)
+            return stats + "\n" + cls._format_blockquote(text)
 
         elif tool_name == "WebSearch":
             # WebSearch: show results count (estimate by sections)
             results = text.count("\n\n") + 1 if text else 0
             stats = f"  ⎿  {results} search results"
-            return stats + "\n" + cls._format_expandable_quote(text)
+            return stats + "\n" + cls._format_blockquote(text)
 
         # Default: expandable quote without stats
-        return cls._format_expandable_quote(text)
+        return cls._format_blockquote(text)
 
     @classmethod
     def parse_entries(
@@ -639,7 +638,7 @@ class TranscriptParser:
                         # real text block arrives later in the same message.
                         thinking_text = block.get("thinking", "")
                         if thinking_text:
-                            quoted = cls._format_expandable_quote(thinking_text)
+                            quoted = cls._format_blockquote(thinking_text)
                             result.append(
                                 ClaudeMessage(
                                     session_id=session_id,
@@ -727,7 +726,7 @@ class TranscriptParser:
                                 entry_text += f"\n  ⎿  Error: {error_summary}"
                                 # If multi-line error, add expandable quote
                                 if "\n" in result_text:
-                                    entry_text += "\n" + cls._format_expandable_quote(
+                                    entry_text += "\n" + cls._format_blockquote(
                                         result_text
                                     )
                             else:
@@ -770,13 +769,13 @@ class TranscriptParser:
                                             "\n"
                                             + stats
                                             + "\n"
-                                            + cls._format_expandable_quote(diff_text)
+                                            + cls._format_blockquote(diff_text)
                                         )
-                            # For other tools, append formatted result text
-                            elif (
-                                result_text
-                                and cls.EXPANDABLE_QUOTE_START not in tool_summary
-                            ):
+                            # For other tools, append formatted result text.
+                            # format_tool_use_summary always returns a single
+                            # line like "**Name**(arg)", so no blockquote
+                            # collision check is needed here.
+                            elif result_text:
                                 entry_text += "\n" + cls._format_tool_result_text(
                                     result_text, tool_name
                                 )
