@@ -49,6 +49,32 @@ class ParserOverrides:
 _CONFIG_FILENAME = "parser_config.json"
 _SUPPORTED_SCHEMA_VERSION = 1
 
+# Names / keys present in the built-in parser constants. Kept in sync
+# with tmux_pane_parser.UI_PATTERNS and
+# claude_transcript_parser.TranscriptParser._BUILTIN_SIMPLE_SUMMARY_FIELDS.
+# Used only for INFO-level shadow detection; merge semantics live in
+# the consuming modules.
+_BUILTIN_UI_PATTERN_NAMES: frozenset[str] = frozenset(
+    {
+        "ExitPlanMode",
+        "AskUserQuestion",
+        "PermissionPrompt",
+        "BashApproval",
+        "RestoreCheckpoint",
+        "Settings",
+    }
+)
+_BUILTIN_SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
+    "Read": "file_path",
+    "Write": "file_path",
+    "Bash": "command",
+    "Grep": "pattern",
+    "Task": "description",
+    "WebFetch": "url",
+    "WebSearch": "query",
+    "Skill": "skill",
+}
+
 
 def _config_path() -> Path:
     return ccmux_dir() / _CONFIG_FILENAME
@@ -113,6 +139,22 @@ def _parse_str_set(raw: object) -> frozenset[str]:
     return frozenset(s for s in raw if isinstance(s, str))
 
 
+def _log_shadows(overrides: ParserOverrides) -> None:
+    for pattern in overrides.ui_patterns:
+        if pattern.name in _BUILTIN_UI_PATTERN_NAMES:
+            logger.info(
+                "shadowing built-in ui_pattern '%s'", pattern.name
+            )
+    for key, value in overrides.simple_summary_fields.items():
+        if key in _BUILTIN_SIMPLE_SUMMARY_FIELDS:
+            logger.info(
+                "shadowing built-in simple_summary_field '%s' (%s -> %s)",
+                key,
+                _BUILTIN_SIMPLE_SUMMARY_FIELDS[key],
+                value,
+            )
+
+
 def load() -> ParserOverrides:
     """Load overrides from `$CCMUX_DIR/parser_config.json`.
 
@@ -146,13 +188,15 @@ def load() -> ParserOverrides:
             _SUPPORTED_SCHEMA_VERSION,
         )
         return ParserOverrides()
-    return ParserOverrides(
+    overrides = ParserOverrides(
         ui_patterns=_parse_ui_patterns(raw.get("ui_patterns")),
         skippable_overlays=_parse_regex_list(raw.get("skippable_overlays")),
         status_spinners=_parse_chars(raw.get("status_spinners")),
         simple_summary_fields=_parse_str_dict(raw.get("simple_summary_fields")),
         bare_summary_tools=_parse_str_set(raw.get("bare_summary_tools")),
     )
+    _log_shadows(overrides)
+    return overrides
 
 
 OVERRIDES: ParserOverrides = load()

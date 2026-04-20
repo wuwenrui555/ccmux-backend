@@ -184,3 +184,85 @@ def test_permission_error_falls_back_with_warning(
         path.chmod(0o600)  # restore so teardown can clean up
     assert result == po.ParserOverrides()
     assert any("parser_config" in r.message for r in caplog.records)
+
+
+# Names / keys known to exist in the built-in parser constants.
+# Kept here so the shadow tests don't depend on importing the parser
+# modules (which we haven't refactored yet).
+_BUILTIN_UI_PATTERN_NAMES = {
+    "ExitPlanMode",
+    "AskUserQuestion",
+    "PermissionPrompt",
+    "BashApproval",
+    "RestoreCheckpoint",
+    "Settings",
+}
+_BUILTIN_SIMPLE_SUMMARY_KEYS = {
+    "Read",
+    "Write",
+    "Bash",
+    "Grep",
+    "Task",
+    "WebFetch",
+    "WebSearch",
+    "Skill",
+}
+
+
+def test_shadow_ui_pattern_logs_info(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "ExitPlanMode", "top": ["^x$"], "bottom": ["^y$"]},
+            ],
+        },
+    )
+    po.load()
+    assert any(
+        "shadow" in r.message.lower() and "ExitPlanMode" in r.message
+        for r in caplog.records
+    )
+
+
+def test_shadow_simple_summary_field_logs_info_with_values(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "simple_summary_fields": {"Read": "new_field"},
+        },
+    )
+    po.load()
+    assert any(
+        "Read" in r.message
+        and "file_path" in r.message
+        and "new_field" in r.message
+        for r in caplog.records
+    )
+
+
+def test_no_shadow_no_info_log(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "BrandNewUI", "top": ["^x$"], "bottom": ["^y$"]},
+            ],
+            "simple_summary_fields": {"BrandNewTool": "arg"},
+        },
+    )
+    po.load()
+    shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
+    assert shadow_records == []
