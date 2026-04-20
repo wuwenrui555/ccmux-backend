@@ -150,3 +150,37 @@ def test_wrong_section_type_scoped_to_that_section(
     result = po.load()
     assert result.ui_patterns == ()
     assert result.bare_summary_tools == frozenset({"StillHere"})
+
+
+def test_malformed_json_falls_back_with_warning(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    (isolated_ccmux_dir / "parser_config.json").write_text("{not-json")
+    result = po.load()
+    assert result == po.ParserOverrides()
+    assert any("invalid JSON" in r.message for r in caplog.records)
+
+
+def test_unknown_schema_version_falls_back_with_warning(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    _write_config(isolated_ccmux_dir, {"$schema_version": 99})
+    result = po.load()
+    assert result == po.ParserOverrides()
+    assert any("schema_version" in r.message and "99" in r.message for r in caplog.records)
+
+
+def test_permission_error_falls_back_with_warning(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    path = _write_config(isolated_ccmux_dir, {"$schema_version": 1})
+    path.chmod(0o000)
+    try:
+        result = po.load()
+    finally:
+        path.chmod(0o600)  # restore so teardown can clean up
+    assert result == po.ParserOverrides()
+    assert any("parser_config" in r.message for r in caplog.records)

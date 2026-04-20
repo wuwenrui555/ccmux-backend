@@ -114,12 +114,37 @@ def _parse_str_set(raw: object) -> frozenset[str]:
 
 
 def load() -> ParserOverrides:
-    """Load overrides from `$CCMUX_DIR/parser_config.json`."""
+    """Load overrides from `$CCMUX_DIR/parser_config.json`.
+
+    Returns `ParserOverrides()` (empty) on any top-level failure:
+    missing file, unreadable file, invalid JSON, unknown schema
+    version. Per-section failures are handled inside the `_parse_*`
+    helpers so one bad section never poisons the others.
+    """
     path = _config_path()
     if not path.exists():
         return ParserOverrides()
-    raw = json.loads(path.read_text())
-    if raw.get("$schema_version") != _SUPPORTED_SCHEMA_VERSION:
+    try:
+        text = path.read_text()
+    except OSError as e:
+        logger.warning("could not read parser_config.json: %s", e)
+        return ParserOverrides()
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.warning("invalid JSON in parser_config.json: %s", e)
+        return ParserOverrides()
+    if not isinstance(raw, dict):
+        logger.warning("parser_config.json top-level must be an object")
+        return ParserOverrides()
+    version = raw.get("$schema_version")
+    if version != _SUPPORTED_SCHEMA_VERSION:
+        logger.warning(
+            "parser_config.json $schema_version=%r unsupported "
+            "(expected %d); ignoring file",
+            version,
+            _SUPPORTED_SCHEMA_VERSION,
+        )
         return ParserOverrides()
     return ParserOverrides(
         ui_patterns=_parse_ui_patterns(raw.get("ui_patterns")),
