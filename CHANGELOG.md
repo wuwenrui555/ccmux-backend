@@ -5,6 +5,29 @@ All notable changes to `ccmux` are documented here. The project follows
 (`ccmux.api`) is stable across minor and patch releases; breaking changes
 require a major bump.
 
+## 1.2.0 — 2026-04-19
+
+### Added
+
+- `$CCMUX_DIR/parser_config.json` — optional JSON override for five
+  Claude-Code-coupled parser constants (`UI_PATTERNS`,
+  `_SKIPPABLE_OVERLAY_PATTERNS`, `STATUS_SPINNERS`,
+  `TranscriptParser._SIMPLE_SUMMARY_FIELDS`,
+  `TranscriptParser._BARE_SUMMARY_TOOLS`). Lets ops patch drift when
+  a Claude Code update changes wording without waiting for a backend
+  release. Merge semantics: user `ui_patterns` prepend to built-in so
+  they match first; `simple_summary_fields` replaces built-in values
+  per key; `skippable_overlays`, `status_spinners`, and
+  `bare_summary_tools` take the union. Unknown schema version,
+  malformed JSON, or per-entry errors degrade to empty overrides with
+  warnings — the bot never fails to start because of a bad file. See
+  [`docs/claude-code-compat.md`](docs/claude-code-compat.md) for the
+  drift quick-fix procedure.
+- INFO log on every successful override load summarising per-section
+  counts plus an additional INFO per detected shadow (same name as a
+  built-in `ui_patterns` entry, or same key as a built-in
+  `simple_summary_fields`).
+
 ## 1.1.0 — 2026-04-19
 
 ### Added

@@ -24,6 +24,10 @@ import logging
 import re
 from dataclasses import dataclass
 
+from .parser_overrides import (
+    OVERRIDES,
+    UIPattern,
+)  # UIPattern re-exported for back-compat
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -51,31 +55,11 @@ class InteractiveUIContent:
     name: str  # Pattern name that matched (e.g. "AskUserQuestion")
 
 
-@dataclass(frozen=True)
-class UIPattern:
-    """A text-marker pair that delimits an interactive UI region.
-
-    Extraction scans lines top-down: the first line matching any `top` pattern
-    marks the start, the first subsequent line matching any `bottom` pattern
-    marks the end.  Both boundary lines are included in the extracted content.
-
-    `top` and `bottom` are tuples of compiled regexes — any single match
-    is sufficient.  This accommodates wording changes across Claude Code
-    versions (e.g. a reworded confirmation prompt).
-    """
-
-    name: str  # Propagated to InteractiveUIContent.name; frontend uses it
-    # to pick a keyboard layout (e.g. a Telegram frontend's prompt module).
-    top: tuple[re.Pattern[str], ...]
-    bottom: tuple[re.Pattern[str], ...]
-    min_gap: int = 2  # minimum lines between top and bottom (inclusive)
-
-
 # ---------------------------------------------------------------------------
 # UI pattern definitions (order matters — first match wins)
 # ---------------------------------------------------------------------------
 
-UI_PATTERNS: list[UIPattern] = [
+_BUILTIN_UI_PATTERNS: list[UIPattern] = [
     UIPattern(
         name="ExitPlanMode",
         top=(
@@ -151,6 +135,10 @@ UI_PATTERNS: list[UIPattern] = [
         ),
     ),
 ]
+
+# Public view after merging user-supplied overrides. User entries are
+# prepended so they match before the built-in patterns during scan.
+UI_PATTERNS: list[UIPattern] = list(OVERRIDES.ui_patterns) + _BUILTIN_UI_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -383,17 +371,21 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 # Spinner characters Claude Code uses in its status line
-STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+_BUILTIN_STATUS_SPINNERS: frozenset[str] = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+STATUS_SPINNERS: frozenset[str] = _BUILTIN_STATUS_SPINNERS | OVERRIDES.status_spinners
 
 # Overlay lines that may sit between the real spinner and the chrome.
 # These are transient Claude Code modals — e.g. the "How is Claude doing
 # this session?" rating prompt — that must not short-circuit spinner
 # detection. Scan-upward skips any line matching one of these patterns
 # and continues looking for the spinner above.
-_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+_BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Session-rating modal (CC 2.1.x+).
     re.compile(r"^\s*●\s*How is Claude doing this session\?"),
     re.compile(r"^\s*1:\s*Bad\b"),
+)
+_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    OVERRIDES.skippable_overlays + _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS
 )
 
 # Upper bound on how far above the chrome separator the real spinner can

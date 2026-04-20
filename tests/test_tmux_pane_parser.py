@@ -492,3 +492,37 @@ class TestParseUsageOutput:
     def test_returns_none_when_not_usage_modal(self):
         pane = "some conversation text\n\nmore text\n"
         assert parse_usage_output(pane) is None
+
+
+def test_user_ui_pattern_is_prepended_and_matches_first(monkeypatch, tmp_path) -> None:
+    import importlib
+    import json
+
+    monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+    (tmp_path / "parser_config.json").write_text(
+        json.dumps(
+            {
+                "$schema_version": 1,
+                "ui_patterns": [
+                    {
+                        "name": "ExitPlanMode",
+                        "top": ["^CUSTOM TOP$"],
+                        "bottom": ["^CUSTOM BOTTOM$"],
+                    }
+                ],
+            }
+        )
+    )
+
+    from ccmux import parser_overrides, tmux_pane_parser
+
+    importlib.reload(parser_overrides)
+    importlib.reload(tmux_pane_parser)
+
+    # User's ExitPlanMode is prepended so it appears first in the
+    # scan order. The original built-in entry is still present.
+    names = [p.name for p in tmux_pane_parser.UI_PATTERNS]
+    assert names[0] == "ExitPlanMode"
+    assert names.count("ExitPlanMode") == 2  # user + built-in
+    user_first = tmux_pane_parser.UI_PATTERNS[0]
+    assert user_first.top[0].pattern == "^CUSTOM TOP$"

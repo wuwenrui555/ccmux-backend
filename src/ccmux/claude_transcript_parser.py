@@ -24,6 +24,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .parser_overrides import OVERRIDES
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,7 +200,7 @@ class TranscriptParser:
     # One-field tools: tool name -> input dict key to surface as summary.
     # When CC drifts a field name, edit here; shape is a table so the fix
     # is a one-line change rather than hunting through if/elif.
-    _SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
+    _BUILTIN_SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
         "Read": "file_path",
         "Write": "file_path",
         "Bash": "command",
@@ -208,9 +210,18 @@ class TranscriptParser:
         "WebSearch": "query",
         "Skill": "skill",
     }
+    _SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
+        **_BUILTIN_SIMPLE_SUMMARY_FIELDS,
+        **OVERRIDES.simple_summary_fields,
+    }
 
     # Tools that intentionally render as bare "**Name**" with no argument.
-    _BARE_SUMMARY_TOOLS: frozenset[str] = frozenset({"TodoRead", "ExitPlanMode"})
+    _BUILTIN_BARE_SUMMARY_TOOLS: frozenset[str] = frozenset(
+        {"TodoRead", "ExitPlanMode"}
+    )
+    _BARE_SUMMARY_TOOLS: frozenset[str] = (
+        _BUILTIN_BARE_SUMMARY_TOOLS | OVERRIDES.bare_summary_tools
+    )
 
     @classmethod
     def format_tool_use_summary(cls, name: str, input_data: dict | Any) -> str:
