@@ -11,6 +11,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +45,24 @@ class ParserOverrides:
     bare_summary_tools: frozenset[str] = frozenset()
 
 
+_CONFIG_FILENAME = "parser_config.json"
+
+
+def _config_path() -> Path:
+    return ccmux_dir() / _CONFIG_FILENAME
+
+
 def load() -> ParserOverrides:
-    """Load overrides from `$CCMUX_DIR/parser_config.json`. Placeholder."""
+    """Load overrides from `$CCMUX_DIR/parser_config.json`.
+
+    Returns an empty `ParserOverrides` when the file is absent. Any
+    failure during parsing degrades to an empty override with a
+    WARNING; the bot never fails to start because of a bad file.
+    """
+    path = _config_path()
+    if not path.exists():
+        return ParserOverrides()
+    # Further cases added in Tasks 3-5.
     return ParserOverrides()
 
 
