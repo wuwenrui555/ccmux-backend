@@ -113,14 +113,14 @@ failure mode degrades the smallest unit it can:
 | File absent | Silent, use built-ins | none |
 | Unreadable (permissions / IO) | Empty overrides, use built-ins | WARNING |
 | JSON syntax error | Empty overrides, use built-ins | WARNING + exception string |
-| `$schema_version` not in {`1`} | Empty overrides, use built-ins | WARNING |
+| `$schema_version` != `1` | Empty overrides, use built-ins | WARNING |
 | Section has wrong top-level type | That section skipped, others still load | WARNING |
 | Entry malformed (bad regex, missing field, wrong value type) | That entry skipped, rest of section loaded | WARNING with entry index |
 
 ### Success log
 
-On successful load, one INFO line summarising counts plus any shadow
-warnings:
+On successful load, emit one INFO summary line with per-section counts,
+followed by one additional INFO line per detected shadow:
 
 ```
 ccmux.parser_overrides: loaded parser_config.json:
@@ -205,18 +205,17 @@ or one bad section cannot poison the others.
 
 ### Import graph
 
-```
-parser_overrides.py        (no ccmux imports — only stdlib)
-        ↑ imports
-tmux_pane_parser.py
-claude_transcript_parser.py
-```
+- `parser_overrides` imports only from stdlib (`re`, `json`,
+  `dataclasses`, `logging`, `pathlib`) plus `ccmux.util.ccmux_dir`.
+- `tmux_pane_parser` and `claude_transcript_parser` import
+  `OVERRIDES` (and the `UIPattern` dataclass) from `parser_overrides`.
+- No reverse edges — `parser_overrides` does not import any of the
+  parser modules.
 
 `parser_overrides` must construct `UIPattern` instances from the JSON,
 which would create a circular import if `UIPattern` lived in
-`tmux_pane_parser`. Resolution: move the `UIPattern` dataclass
-definition into `parser_overrides` (or a new shared
-`parser_types` module), and have `tmux_pane_parser` re-export it so
+`tmux_pane_parser`. Resolution: the `UIPattern` dataclass is defined
+in `parser_overrides`, and `tmux_pane_parser` re-exports it so
 existing imports (`from .tmux_pane_parser import UIPattern`, used by
 tests and external consumers) continue to resolve.
 
