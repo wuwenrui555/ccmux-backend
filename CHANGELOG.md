@@ -5,6 +5,26 @@ All notable changes to `ccmux` are documented here. The project follows
 (`ccmux.api`) is stable across minor and patch releases; breaking changes
 require a major bump.
 
+## 1.1.0 — 2026-04-19
+
+### Added
+
+- `hook.log` under `CCMUX_DIR` (default `~/.ccmux/hook.log`). The
+  `ccmux hook` CLI now tees logs to a file handler alongside stderr so
+  SessionStart invocations can be diagnosed after Claude Code's inline
+  error banner scrolls away. Unhandled exceptions are recorded with a
+  full traceback before the process exits 1. File logging is
+  best-effort — a read-only state directory degrades to stderr-only
+  without blocking the hook.
+
+### Fixed
+
+- `uv.lock` is now tracked in the repo. Previously it was gitignored,
+  which broke the `astral-sh/setup-uv@v3` cache step in CI
+  (`No file ... matched to [**/uv.lock]`). Tracking the lockfile is
+  also the standard convention for uv projects: reproducible installs
+  and diff review of dependency bumps.
+
 ## 1.0.0 — 2026-04-19
 
 First stable release. The `ccmux.api` surface is now frozen.

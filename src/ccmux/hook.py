@@ -9,6 +9,11 @@ cheap to start from inside a tmux pane (no dotenv load, no env parsing).
 Config directory resolution uses `util.ccmux_dir()` instead, which is
 shared with `config.py`.
 
+Logging is teed to both stderr (captured by Claude Code) and
+<CCMUX_DIR>/hook.log so past invocations can be diagnosed after Claude
+Code's error banner scrolls away. Unhandled exceptions are logged via
+`logger.exception` before the process exits 1.
+
 Key functions: hook_main() (CLI entry), _install_hook().
 """
 
@@ -156,6 +161,52 @@ def _install_hook() -> int:
     return 0
 
 
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+
+def _configure_hook_logging() -> None:
+    """Tee hook logs to stderr (for Claude Code) and <CCMUX_DIR>/hook.log.
+
+    The file handler lets us recover tracebacks after Claude Code's error
+    banner scrolls off-screen; stderr stays so Claude Code still surfaces
+    failures inline. Safe to call multiple times (guarded by handler
+    presence check).
+    """
+    from .util import ccmux_dir
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    if not any(
+        isinstance(h, logging.StreamHandler)
+        and getattr(h, "stream", None) is sys.stderr
+        for h in root.handlers
+    ):
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setLevel(logging.DEBUG)
+        stderr_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        root.addHandler(stderr_handler)
+
+    log_path = ccmux_dir() / "hook.log"
+    already_has_file = any(
+        isinstance(h, logging.FileHandler)
+        and getattr(h, "baseFilename", None) == str(log_path)
+        for h in root.handlers
+    )
+    if already_has_file:
+        return
+
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        root.addHandler(file_handler)
+    except OSError as e:
+        # File logging is best-effort; don't let a read-only FS block the hook.
+        logger.warning("Could not open hook.log: %s", e)
+
+
 def hook_main() -> None:
     """CLI entry point for the hook subcommand.
 
@@ -164,13 +215,17 @@ def hook_main() -> None:
     - `ccmux hook`: read a SessionStart event from stdin and update
       `window_bindings.json` with the tmux session → window_id + session_id mapping
     """
-    # Configure logging for the hook subprocess (main.py logging doesn't apply here)
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=logging.DEBUG,
-        stream=sys.stderr,
-    )
+    _configure_hook_logging()
+    try:
+        _hook_main_impl()
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("Hook crashed with unhandled exception")
+        sys.exit(1)
 
+
+def _hook_main_impl() -> None:
     parser = argparse.ArgumentParser(
         prog="ccmux hook",
         description="Claude Code session tracking hook",
