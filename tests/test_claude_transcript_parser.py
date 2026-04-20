@@ -567,3 +567,31 @@ class TestParseEntries:
         )
         user_entries = [e for e in result if e.role == "user"]
         assert len(user_entries) == 0
+
+
+def test_user_simple_summary_field_overrides_builtin(monkeypatch, tmp_path) -> None:
+    import importlib
+    import json
+
+    monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+    (tmp_path / "parser_config.json").write_text(
+        json.dumps(
+            {
+                "$schema_version": 1,
+                "simple_summary_fields": {"Read": "new_field"},
+                "bare_summary_tools": ["BrandNewTool"],
+            }
+        )
+    )
+
+    from ccmux import claude_transcript_parser as ctp
+    from ccmux import parser_overrides
+
+    importlib.reload(parser_overrides)
+    importlib.reload(ctp)
+
+    assert ctp.TranscriptParser._SIMPLE_SUMMARY_FIELDS["Read"] == "new_field"
+    # built-in entries are preserved for tools the user did not override
+    assert ctp.TranscriptParser._SIMPLE_SUMMARY_FIELDS["Bash"] == "command"
+    assert "BrandNewTool" in ctp.TranscriptParser._BARE_SUMMARY_TOOLS
+    assert "TodoRead" in ctp.TranscriptParser._BARE_SUMMARY_TOOLS
