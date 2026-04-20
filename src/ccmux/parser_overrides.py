@@ -35,7 +35,7 @@ class UIPattern:
 class ParserOverrides:
     """User-supplied overrides for the five Claude-Code-coupled constants."""
 
-    ui_patterns: list[UIPattern] = field(default_factory=list)
+    ui_patterns: tuple[UIPattern, ...] = ()
     skippable_overlays: tuple[re.Pattern[str], ...] = ()
     status_spinners: frozenset[str] = frozenset()
     simple_summary_fields: dict[str, str] = field(default_factory=dict)
