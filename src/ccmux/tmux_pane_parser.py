@@ -284,10 +284,13 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # Status line parsing
 # ---------------------------------------------------------------------------
 
-# Upper bound on how far above the chrome separator the real spinner can
-# sit once overlays are in the way. Generous enough to tolerate 2–3
-# lines of modal plus blank gaps.
-_STATUS_SCAN_WINDOW = 10
+# Absolute safety cap on how far above the chrome separator we'll scan.
+# Blanks, recognised overlay modals, and task-checklist lines are *free
+# skips* and do not count against this budget; only unknown lines bail
+# the scan immediately. This is a runaway guard for corrupted panes,
+# not a semantic limit — a real Claude Code pane never has more than a
+# few dozen chrome-above lines.
+_STATUS_SCAN_WINDOW = 100
 
 
 def parse_status_line(pane_text: str) -> str | None:
@@ -295,11 +298,11 @@ def parse_status_line(pane_text: str) -> str | None:
 
     The status line (spinner + working text) lives above the chrome
     separator (a full line of `─` characters). We locate the separator
-    first, then scan upward — skipping blank lines and recognised
-    overlay modals (e.g. the session-rating prompt) — until we either
-    find a spinner or exhaust the scan window. Bailing only on a
-    non-spinner, non-overlay line keeps `·` bullets in regular output
-    from producing false positives.
+    first, then scan upward, skipping blanks, recognised overlay modals
+    (e.g. the session-rating prompt), and task-checklist glyphs (e.g.
+    TodoWrite's ◼/◻). The scan returns the spinner when found and bails
+    on the first truly unknown line, which keeps stray `·` bullets in
+    regular output from producing false positives.
 
     Returns the text after the spinner, or None if no status line found.
     """
@@ -316,6 +319,8 @@ def parse_status_line(pane_text: str) -> str | None:
         line = lines[i]
         stripped = line.strip()
         if not stripped:
+            continue
+        if stripped[0] in _pc.STATUS_SKIP_GLYPHS:
             continue
         if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
             continue

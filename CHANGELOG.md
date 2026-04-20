@@ -5,6 +5,28 @@ All notable changes to `ccmux` are documented here. The project follows
 (`ccmux.api`) is stable across minor and patch releases; breaking changes
 require a major bump.
 
+## [Unreleased]
+
+### Fixed
+
+- `parse_status_line` now correctly detects the Claude Code spinner
+  when a TodoWrite task checklist (`◼` / `◻` / etc.) sits between the
+  spinner and the chrome separator. Previously the checklist rows
+  were treated as unknown text and bailed the upward scan, leaving
+  Telegram status messages stale during long subagent or multi-step
+  runs.
+- The upward scan budget (`_STATUS_SCAN_WINDOW`, now `100`) counts
+  only unknown lines. Blank lines, recognised overlay modals, and the
+  new checklist glyphs are free skips and do not consume the budget,
+  so arbitrarily long task lists no longer starve the scan.
+
+### Added
+
+- `parser_config.STATUS_SKIP_GLYPHS` — glyph set of task-checklist
+  bullets (`◼ ◻ ☐ ☒ ✔ ✓`) that are free-skipped between spinner and
+  chrome. Overridable via `parser_config.json`'s new
+  `status_skip_glyphs` array.
+
 ## 1.2.1 — 2026-04-19
 
 ### Changed (internal only — no `ccmux.api` impact)

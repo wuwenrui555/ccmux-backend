@@ -83,6 +83,65 @@ class TestParseStatusLine:
         pane = f"✽ Old spinner\nSome unknown modal line\n{chrome}"
         assert parse_status_line(pane) is None
 
+    def test_skips_through_task_checklist(self, chrome: str):
+        """TodoWrite checklist between spinner and chrome must not bail."""
+        pane = (
+            "some output\n"
+            "✶ Exploring project context… (2m · ↑ 1.3k tokens)\n"
+            "  ◼ Explore ccmux-telegram project context\n"
+            "  ◻ Ask clarifying questions on both UX issues\n"
+            "  ◻ Propose approaches\n"
+            "\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane) == "Exploring project context… (2m · ↑ 1.3k tokens)"
+        )
+
+    def test_skips_through_long_task_checklist(self, chrome: str):
+        """A checklist larger than the legacy 10-line scan window still
+        finds the spinner — checklist lines are free-skip, not counted."""
+        tasks = "\n".join(f"  ◻ Task {i}" for i in range(20))
+        pane = f"output\n✽ Running\n{tasks}\n\n{chrome}"
+        assert parse_status_line(pane) == "Running"
+
+    def test_all_checklist_glyphs_are_skippable(self, chrome: str):
+        """Each glyph in STATUS_SKIP_GLYPHS must be free-skip."""
+        from ccmux.parser_config import STATUS_SKIP_GLYPHS
+
+        for glyph in STATUS_SKIP_GLYPHS:
+            pane = f"✽ Running\n  {glyph} Some task\n{chrome}"
+            assert parse_status_line(pane) == "Running", f"failed for glyph {glyph!r}"
+
+    def test_checklist_only_no_spinner_returns_none(self, chrome: str):
+        """Pane with task list but no spinner must not false-positive."""
+        pane = "output\n  ◼ Task 1\n  ◻ Task 2\n" + chrome
+        assert parse_status_line(pane) is None
+
+    def test_unknown_text_after_checklist_still_bails(self, chrome: str):
+        """Unknown text above checklist still short-circuits scan."""
+        pane = (
+            "✽ Very old spinner that should NOT be returned\n"
+            "some rogue line that is not known chrome\n"
+            "  ◼ Task 1\n"
+            "  ◻ Task 2\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) is None
+
+    def test_checklist_plus_rating_modal(self, chrome: str):
+        """Checklist and overlay modal can co-exist between spinner and chrome."""
+        pane = (
+            "✶ Working on stuff\n"
+            "  ◼ Task 1\n"
+            "  ◻ Task 2\n"
+            "\n"
+            "● How is Claude doing this session? (optional)\n"
+            "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == "Working on stuff"
+
 
 # ── extract_interactive_content ──────────────────────────────────────────
 

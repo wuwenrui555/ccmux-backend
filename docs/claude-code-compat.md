@@ -73,9 +73,10 @@ doc](superpowers/specs/2026-04-19-externalize-cc-constants-design.md).
 **Fix:** patch the offending constant / regex; parser tests cover most
 of these.
 
-**Drift quick-fix (no backend release):** for `STATUS_SPINNERS` and
-`_SKIPPABLE_OVERLAY_PATTERNS`, append the new glyph / overlay regex
-to `status_spinners` or `skippable_overlays` in
+**Drift quick-fix (no backend release):** for `STATUS_SPINNERS`,
+`_SKIPPABLE_OVERLAY_PATTERNS`, and `STATUS_SKIP_GLYPHS`, append the
+new glyph / overlay regex / checklist glyph to `status_spinners`,
+`skippable_overlays`, or `status_skip_glyphs` in
 `$CCMUX_DIR/parser_config.json` and restart the frontend.
 Chrome-separator and `parse_usage_output` / `extract_bash_output`
 anchors are not yet externalised — they still need a backend patch.
