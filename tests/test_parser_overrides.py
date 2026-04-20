@@ -87,3 +87,66 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
 
     # bare_summary_tools
     assert result.bare_summary_tools == frozenset({"AnotherTool"})
+
+
+def test_invalid_regex_in_ui_pattern_skips_entry(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "Bad", "top": ["("], "bottom": ["ok"]},
+                {"name": "Good", "top": ["^ok$"], "bottom": ["^ok$"]},
+            ],
+        },
+    )
+    result = po.load()
+    names = [p.name for p in result.ui_patterns]
+    assert names == ["Good"]
+    assert any("ui_patterns[0]" in r.message for r in caplog.records)
+
+
+def test_missing_required_field_skipped(isolated_ccmux_dir: Path) -> None:
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "OnlyName"},  # missing top/bottom
+                {"name": "Good", "top": ["^x$"], "bottom": ["^y$"]},
+            ],
+        },
+    )
+    result = po.load()
+    assert [p.name for p in result.ui_patterns] == ["Good"]
+
+
+def test_non_single_char_spinner_rejected(isolated_ccmux_dir: Path) -> None:
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "status_spinners": ["✻", "abc", "", "✽"],
+        },
+    )
+    result = po.load()
+    assert result.status_spinners == frozenset({"✻", "✽"})
+
+
+def test_wrong_section_type_scoped_to_that_section(
+    isolated_ccmux_dir: Path,
+) -> None:
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": {"not": "a list"},
+            "bare_summary_tools": ["StillHere"],
+        },
+    )
+    result = po.load()
+    assert result.ui_patterns == ()
+    assert result.bare_summary_tools == frozenset({"StillHere"})

@@ -58,24 +58,30 @@ def _parse_ui_patterns(raw: object) -> tuple[UIPattern, ...]:
     if not isinstance(raw, list):
         return ()
     out: list[UIPattern] = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        name = entry.get("name")
-        top_src = entry.get("top")
-        bottom_src = entry.get("bottom")
-        if (
-            not isinstance(name, str)
-            or not isinstance(top_src, list)
-            or not isinstance(bottom_src, list)
-        ):
-            continue
-        top = tuple(re.compile(p) for p in top_src if isinstance(p, str))
-        bottom = tuple(re.compile(p) for p in bottom_src if isinstance(p, str))
-        min_gap = entry.get("min_gap", 2)
-        if not isinstance(min_gap, int):
-            min_gap = 2
-        out.append(UIPattern(name=name, top=top, bottom=bottom, min_gap=min_gap))
+    for index, entry in enumerate(raw):
+        try:
+            if not isinstance(entry, dict):
+                raise TypeError("entry is not a JSON object")
+            name = entry.get("name")
+            top_src = entry.get("top")
+            bottom_src = entry.get("bottom")
+            if not isinstance(name, str):
+                raise KeyError("name")
+            if not isinstance(top_src, list):
+                raise KeyError("top")
+            if not isinstance(bottom_src, list):
+                raise KeyError("bottom")
+            top = tuple(
+                re.compile(p) for p in top_src if isinstance(p, str)
+            )
+            bottom = tuple(
+                re.compile(p) for p in bottom_src if isinstance(p, str)
+            )
+            min_gap_raw = entry.get("min_gap", 2)
+            min_gap = min_gap_raw if isinstance(min_gap_raw, int) else 2
+            out.append(UIPattern(name=name, top=top, bottom=bottom, min_gap=min_gap))
+        except (KeyError, TypeError, re.error) as e:
+            logger.warning("ui_patterns[%d] skipped: %s", index, e)
     return tuple(out)
 
 
