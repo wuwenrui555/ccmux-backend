@@ -44,6 +44,12 @@ entry is a drift signal.
 new `UIPattern` for a new UI type). One-line change. Confirm with
 `pytest tests/test_tmux_pane_parser.py`.
 
+**Drift quick-fix (no backend release):** add a new entry to the
+`ui_patterns` section of `$CCMUX_DIR/parser_config.json` and restart
+the frontend. User entries are prepended to the built-in list so they
+match first. See [`parser_config.json` schema in the v1.2.0 design
+doc](superpowers/specs/2026-04-19-externalize-cc-constants-design.md).
+
 ### 🟠 Fragile — chrome / spinner / modal anchors
 
 **Module:** same file.
@@ -67,6 +73,13 @@ new `UIPattern` for a new UI type). One-line change. Confirm with
 **Fix:** patch the offending constant / regex; parser tests cover most
 of these.
 
+**Drift quick-fix (no backend release):** for `STATUS_SPINNERS` and
+`_SKIPPABLE_OVERLAY_PATTERNS`, append the new glyph / overlay regex
+to `status_spinners` or `skippable_overlays` in
+`$CCMUX_DIR/parser_config.json` and restart the frontend.
+Chrome-separator and `parse_usage_output` / `extract_bash_output`
+anchors are not yet externalised — they still need a backend patch.
+
 ### 🟡 Moderate — JSONL and hook contracts
 
 **Module:**
@@ -86,6 +99,10 @@ Anthropic tool-use protocol and evolves slowly. What does churn:
 - New tools — `Skill` was added in 2.1.x. If a new tool lands with
   display semantics (takes a specific field), add it to
   `_SIMPLE_SUMMARY_FIELDS` or `_BARE_SUMMARY_TOOLS`.
+
+**Drift quick-fix (no backend release):** add tool renames or new
+tools to `simple_summary_fields` / `bare_summary_tools` in
+`$CCMUX_DIR/parser_config.json` and restart the frontend.
 
 The hook CLI depends on Claude Code's `SessionStart` payload fields
 `session_id`, `cwd`, `hook_event_name`. If the hook API changes:
@@ -149,4 +166,5 @@ status line frozen      → tmux_pane_parser.STATUS_SPINNERS / _find_chrome_sepa
 new tool not labelled   → claude_transcript_parser._SIMPLE_SUMMARY_FIELDS
 hook not firing         → hook._install_hook / hook_main (payload fields)
 auto-resume loop        → liveness._DEFAULT_CLAUDE_PROC_NAMES (or set CCMUX_CLAUDE_PROC_NAMES)
+drift quick-fix         → $CCMUX_DIR/parser_config.json (see v1.2.0 design)
 ```
