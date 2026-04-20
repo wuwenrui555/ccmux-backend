@@ -365,6 +365,7 @@ def _hook_main_impl() -> None:
         payload = json.load(sys.stdin)
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
+        # `or` handles the case where the key is present but the value is "".
         event = payload.get("hook_event_name", "SessionStart") or "SessionStart"
     except (json.JSONDecodeError, ValueError) as e:
         logger.debug("stdin not usable JSON (%s); will try PID fallback", e)

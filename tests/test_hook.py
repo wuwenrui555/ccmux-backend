@@ -632,7 +632,7 @@ class TestHookMainEmptyStdinFallback:
         def fake_run(cmd, *args, **kwargs):
             result = MagicMock()
             result.returncode = 0
-            if cmd[0] == "tmux" and "#{pane_pid}" in cmd:
+            if cmd[0] == "tmux" and cmd[-1] == "#{pane_pid}":
                 result.stdout = f"{shell_pid}\n"
             elif cmd[0] == "tmux":
                 result.stdout = tmux_window
@@ -705,6 +705,7 @@ class TestHookMainEmptyStdinFallback:
         monkeypatch.setenv("CCMUX_DIR", str(ccmux_dir))
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
+        # No _stub_cmdline needed: pgrep failure short-circuits before /proc reads.
         def fake_run(cmd, *args, **kwargs):
             result = MagicMock()
             if cmd[0] == "tmux":
@@ -723,5 +724,48 @@ class TestHookMainEmptyStdinFallback:
         monkeypatch.setenv("TMUX_PANE", "%17")
 
         hook_main()  # must not raise
+
+        assert not (ccmux_dir / "window_bindings.json").exists()
+
+    def test_invalid_uuid_in_stdin_triggers_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Non-empty stdin with a bad session_id must still trigger the PID
+        fallback (not just empty stdin). When the fallback fails, no write."""
+        ccmux_dir = tmp_path / "ccmux"
+        ccmux_dir.mkdir()
+        monkeypatch.setenv("CCMUX_DIR", str(ccmux_dir))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        def fake_run(cmd, *args, **kwargs):
+            result = MagicMock()
+            if cmd[0] == "tmux":
+                result.stdout = "1234\n"
+                result.returncode = 0
+            elif cmd[0] == "pgrep":
+                result.stdout = ""
+                result.returncode = 1
+            else:
+                raise AssertionError(f"unexpected: {cmd}")
+            return result
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(sys, "argv", ["ccmux", "hook"])
+        monkeypatch.setattr(
+            sys,
+            "stdin",
+            io.StringIO(
+                json.dumps(
+                    {
+                        "session_id": "not-a-uuid",
+                        "cwd": "/tmp",
+                        "hook_event_name": "SessionStart",
+                    }
+                )
+            ),
+        )
+        monkeypatch.setenv("TMUX_PANE", "%17")
+
+        hook_main()
 
         assert not (ccmux_dir / "window_bindings.json").exists()
