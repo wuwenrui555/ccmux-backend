@@ -9,8 +9,9 @@ Parses captured tmux pane content to detect:
   - Bash command output (for `! cmd` echoes).
   - `/usage` modal content.
 
-All Claude Code text patterns live here. To support a new UI type or
-a changed Claude Code version, edit UI_PATTERNS / STATUS_SPINNERS.
+All Claude Code text patterns live in parser_config. To support a new UI
+type or a changed Claude Code version, edit parser_config.UI_PATTERNS /
+parser_config.STATUS_SPINNERS.
 
 Key functions:
   - extract_interactive_content()
@@ -24,10 +25,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from .parser_overrides import (
-    OVERRIDES,
-    UIPattern,
-)  # UIPattern re-exported for back-compat
+from . import parser_config as _pc
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -56,92 +54,6 @@ class InteractiveUIContent:
 
 
 # ---------------------------------------------------------------------------
-# UI pattern definitions (order matters — first match wins)
-# ---------------------------------------------------------------------------
-
-_BUILTIN_UI_PATTERNS: list[UIPattern] = [
-    UIPattern(
-        name="ExitPlanMode",
-        top=(
-            re.compile(r"^\s*Would you like to proceed\?"),
-            # v2.1.29+: longer prefix that may wrap across lines
-            re.compile(r"^\s*Claude has written up a plan"),
-        ),
-        bottom=(
-            re.compile(r"^\s*ctrl-g to edit in "),
-            re.compile(r"^\s*Esc to (cancel|exit)"),
-        ),
-    ),
-    UIPattern(
-        name="AskUserQuestion",
-        top=(re.compile(r"^\s*←\s+[☐✔☒]"),),  # Multi-tab: no bottom needed
-        bottom=(),
-        min_gap=1,
-    ),
-    UIPattern(
-        name="AskUserQuestion",
-        top=(re.compile(r"^\s*[☐✔☒]"),),  # Single-tab: bottom required
-        bottom=(re.compile(r"^\s*Enter to select"),),
-        min_gap=1,
-    ),
-    UIPattern(
-        name="PermissionPrompt",
-        top=(
-            re.compile(r"^\s*Do you want to proceed\?"),
-            re.compile(r"^\s*Do you want to make this edit"),
-            re.compile(r"^\s*Do you want to create \S"),
-            re.compile(r"^\s*Do you want to delete \S"),
-        ),
-        bottom=(re.compile(r"^\s*Esc to cancel"),),
-    ),
-    UIPattern(
-        # Permission menu with numbered choices (no "Esc to cancel" line)
-        name="PermissionPrompt",
-        top=(re.compile(r"^\s*❯\s*1\.\s*Yes"),),
-        bottom=(),
-        min_gap=2,
-    ),
-    UIPattern(
-        # Bash command approval
-        name="BashApproval",
-        top=(
-            re.compile(r"^\s*Bash command\s*$"),
-            re.compile(r"^\s*This command requires approval"),
-        ),
-        bottom=(re.compile(r"^\s*Esc to cancel"),),
-    ),
-    UIPattern(
-        name="RestoreCheckpoint",
-        top=(re.compile(r"^\s*Restore the code"),),
-        bottom=(re.compile(r"^\s*Enter to continue"),),
-    ),
-    UIPattern(
-        name="Settings",
-        top=(
-            # CC 2.1.x+ /config UI: tab bar replaces the old "Settings:" header.
-            # Active tab highlighting is invisible in plain pane capture — we
-            # just anchor on the fixed word order.
-            re.compile(r"^\s*Status\s+Config\s+Usage\s+Stats\s*$"),
-            # /model picker (both pre- and post-2.1)
-            re.compile(r"^\s*Select model"),
-            # Legacy (pre-2.1.x) — kept for older CC installs
-            re.compile(r"^\s*Settings:.*tab to cycle"),
-        ),
-        bottom=(
-            # cancel/exit/clear/close span tab variants across CC versions
-            re.compile(r"Esc to (cancel|exit|clear|close)"),
-            re.compile(r"Enter to confirm"),
-            re.compile(r"^\s*Type to filter"),
-        ),
-    ),
-]
-
-# Public view after merging user-supplied overrides. User entries are
-# prepended so they match before the built-in patterns during scan.
-UI_PATTERNS: list[UIPattern] = list(OVERRIDES.ui_patterns) + _BUILTIN_UI_PATTERNS
-
-
-# ---------------------------------------------------------------------------
 # Post-processing
 # ---------------------------------------------------------------------------
 
@@ -160,7 +72,9 @@ def _shorten_separators(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _try_extract(lines: list[str], pattern: UIPattern) -> InteractiveUIContent | None:
+def _try_extract(
+    lines: list[str], pattern: _pc.UIPattern
+) -> InteractiveUIContent | None:
     """Try to extract content matching a single UI pattern.
 
     When `pattern.bottom` is empty, the region extends from the top marker
@@ -238,7 +152,7 @@ def _looks_like_prompt(lines: list[str]) -> bool:
 def _log_pattern_drift(lines: list[str]) -> None:
     """Warn once per unique pane fingerprint when prompt signals don't match any pattern.
 
-    Fires when `_looks_like_prompt` is True but `UI_PATTERNS` produced no
+    Fires when `_looks_like_prompt` is True but `_pc.UI_PATTERNS` produced no
     match — typically means a Claude Code upgrade reworded a prompt and
     the regex needs an update. Dedup is per-process; resets across restarts.
     """
@@ -258,7 +172,7 @@ def _log_pattern_drift(lines: list[str]) -> None:
     drift_logger.warning(
         "Interactive UI signals detected but no UI_PATTERNS matched "
         "(fingerprint=%s). Claude Code upgrade may have changed prompt "
-        "wording — edit tmux_pane_parser.UI_PATTERNS. Last lines:\n%s",
+        "wording — edit parser_config.UI_PATTERNS. Last lines:\n%s",
         fingerprint,
         "\n".join(tail),
     )
@@ -284,7 +198,7 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
 
     lines = pane_text.strip().split("\n")
 
-    for pattern in UI_PATTERNS:
+    for pattern in _pc.UI_PATTERNS:
         result = _try_extract(lines, pattern)
         if result:
             return result
@@ -370,24 +284,6 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # Status line parsing
 # ---------------------------------------------------------------------------
 
-# Spinner characters Claude Code uses in its status line
-_BUILTIN_STATUS_SPINNERS: frozenset[str] = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
-STATUS_SPINNERS: frozenset[str] = _BUILTIN_STATUS_SPINNERS | OVERRIDES.status_spinners
-
-# Overlay lines that may sit between the real spinner and the chrome.
-# These are transient Claude Code modals — e.g. the "How is Claude doing
-# this session?" rating prompt — that must not short-circuit spinner
-# detection. Scan-upward skips any line matching one of these patterns
-# and continues looking for the spinner above.
-_BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # Session-rating modal (CC 2.1.x+).
-    re.compile(r"^\s*●\s*How is Claude doing this session\?"),
-    re.compile(r"^\s*1:\s*Bad\b"),
-)
-_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
-    OVERRIDES.skippable_overlays + _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS
-)
-
 # Upper bound on how far above the chrome separator the real spinner can
 # sit once overlays are in the way. Generous enough to tolerate 2–3
 # lines of modal plus blank gaps.
@@ -421,9 +317,9 @@ def parse_status_line(pane_text: str) -> str | None:
         stripped = line.strip()
         if not stripped:
             continue
-        if any(p.search(line) for p in _SKIPPABLE_OVERLAY_PATTERNS):
+        if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
             continue
-        if stripped[0] in STATUS_SPINNERS:
+        if stripped[0] in _pc.STATUS_SPINNERS:
             return stripped[1:].strip()
         return None
     return None

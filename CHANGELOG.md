@@ -5,6 +5,42 @@ All notable changes to `ccmux` are documented here. The project follows
 (`ccmux.api`) is stable across minor and patch releases; breaking changes
 require a major bump.
 
+## 1.2.1 — 2026-04-19
+
+### Changed (internal only — no `ccmux.api` impact)
+
+- Renamed `ccmux.parser_overrides` → `ccmux.parser_config`. Logger
+  name follows (`ccmux.parser_overrides` → `ccmux.parser_config`).
+- `parser_config` is now the single source of truth for
+  Claude-Code-coupled parser constants. Built-in defaults, user
+  override loading, merge composition, and shadow detection all
+  live here. Parser modules (`tmux_pane_parser`,
+  `claude_transcript_parser`) are pure consumers of
+  `parser_config.UI_PATTERNS`, `parser_config.STATUS_SPINNERS`, etc.
+- Removed `UIPattern` re-export from `tmux_pane_parser`. Import
+  from `ccmux.parser_config` instead.
+- Removed `_SIMPLE_SUMMARY_FIELDS` / `_BARE_SUMMARY_TOOLS` class
+  attributes from `TranscriptParser`. Use
+  `ccmux.parser_config.SIMPLE_SUMMARY_FIELDS` /
+  `BARE_SUMMARY_TOOLS` directly.
+- Removed module-level `UI_PATTERNS`, `STATUS_SPINNERS`, and
+  `_SKIPPABLE_OVERLAY_PATTERNS` attributes from `tmux_pane_parser`.
+  Import from `ccmux.parser_config` instead.
+
+### Fixed
+
+- Shadow detection no longer relies on a local duplicate of
+  built-in names inside the override module. Adding a new built-in
+  `UIPattern` or summary field now automatically participates in
+  shadow detection without a second manual edit.
+
+### Not affected
+
+- `ccmux.api` surface is unchanged.
+- `$CCMUX_DIR/parser_config.json` schema is unchanged.
+- All user-observable behaviour (merge semantics, error handling,
+  log output) is preserved.
+
 ## 1.2.0 — 2026-04-19
 
 ### Added

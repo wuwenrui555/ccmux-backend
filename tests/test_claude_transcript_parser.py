@@ -584,14 +584,11 @@ def test_user_simple_summary_field_overrides_builtin(monkeypatch, tmp_path) -> N
         )
     )
 
-    from ccmux import claude_transcript_parser as ctp
-    from ccmux import parser_overrides
+    from ccmux import parser_config
 
-    importlib.reload(parser_overrides)
-    importlib.reload(ctp)
+    importlib.reload(parser_config)
 
-    assert ctp.TranscriptParser._SIMPLE_SUMMARY_FIELDS["Read"] == "new_field"
-    # built-in entries are preserved for tools the user did not override
-    assert ctp.TranscriptParser._SIMPLE_SUMMARY_FIELDS["Bash"] == "command"
-    assert "BrandNewTool" in ctp.TranscriptParser._BARE_SUMMARY_TOOLS
-    assert "TodoRead" in ctp.TranscriptParser._BARE_SUMMARY_TOOLS
+    assert parser_config.SIMPLE_SUMMARY_FIELDS["Read"] == "new_field"
+    assert parser_config.SIMPLE_SUMMARY_FIELDS["Bash"] == "command"
+    assert "BrandNewTool" in parser_config.BARE_SUMMARY_TOOLS
+    assert "TodoRead" in parser_config.BARE_SUMMARY_TOOLS
