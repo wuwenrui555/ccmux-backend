@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -294,19 +295,19 @@ def load() -> ParserOverrides:
 
 
 def _log_ui_pattern_shadows(
-    user: tuple[UIPattern, ...],
-    builtin: list[UIPattern],
+    user: Iterable[UIPattern],
+    builtin: Iterable[UIPattern],
 ) -> None:
     """Emit INFO for each user UIPattern whose name matches a built-in entry."""
-    builtin_names = frozenset(p.name for p in builtin)
-    for pattern in user:
-        if pattern.name in builtin_names:
-            logger.info("shadowing built-in ui_pattern '%s'", pattern.name)
+    builtin_names = {p.name for p in builtin}
+    for p in user:
+        if p.name in builtin_names:
+            logger.info("shadowing built-in ui_pattern '%s'", p.name)
 
 
 def _log_summary_field_shadows(
-    user: dict[str, str],
-    builtin: dict[str, str],
+    user: Mapping[str, str],
+    builtin: Mapping[str, str],
 ) -> None:
     """Emit INFO for each user simple_summary_fields key that shadows a built-in."""
     for key, value in user.items():
