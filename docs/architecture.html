@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ccmux — backend architecture</title>
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --muted: #6b6b6b;
+      --accent: #b44d00;
+      --rule: #e6e2dc;
+      --bg: #fbf9f5;
+      --card: #ffffff;
+      --code-bg: #f3efe8;
+      --internal: #c49a6c;
+    }
+    html { background: var(--bg); }
+    body {
+      max-width: 880px;
+      margin: 2.5rem auto 6rem;
+      padding: 0 1.25rem;
+      font: 16px/1.6 "Inter", "Helvetica Neue", system-ui, sans-serif;
+      color: var(--fg);
+    }
+    h1 {
+      font-size: 2.1rem;
+      font-weight: 600;
+      margin: 0 0 .25rem;
+      letter-spacing: -0.01em;
+    }
+    h1 .dim { color: var(--muted); font-weight: 400; }
+    h2 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin: 3rem 0 .75rem;
+      padding-bottom: .35rem;
+      border-bottom: 1px solid var(--rule);
+      letter-spacing: -0.01em;
+    }
+    h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 2rem 0 .5rem;
+    }
+    p, li { color: var(--fg); }
+    a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+    a:hover { border-bottom-color: var(--accent); }
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+      margin: 0 0 2rem;
+    }
+    code, kbd {
+      font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+      font-size: .9em;
+      background: var(--code-bg);
+      padding: .08em .3em;
+      border-radius: 3px;
+    }
+    pre {
+      background: var(--code-bg);
+      padding: .9rem 1rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: .88em;
+      line-height: 1.55;
+    }
+    pre code { background: none; padding: 0; }
+    .tag {
+      display: inline-block;
+      font-size: .72em;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: .1em .55em;
+      border-radius: 3px;
+      vertical-align: 2px;
+      margin-left: .5em;
+    }
+    .tag.public  { background: #e7f2d8; color: #3a6b14; }
+    .tag.internal { background: #f2e2cc; color: #7a4a10; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      padding: 1rem 1.1rem;
+    }
+    .card h4 {
+      margin: 0 0 .4rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .93em;
+    }
+    .card code { font-size: .86em; }
+    .flow {
+      margin: 1.2rem 0;
+      padding: 1rem 1.1rem;
+      background: var(--card);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      font-family: "JetBrains Mono", Menlo, monospace;
+      font-size: .85em;
+      line-height: 1.7;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .arrow { color: var(--accent); }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .94em; }
+    th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+    th { font-weight: 600; color: var(--muted); font-size: .85em; text-transform: uppercase; letter-spacing: 0.04em; }
+    td code { white-space: nowrap; }
+    .note {
+      margin: 1rem 0;
+      padding: .8rem 1rem;
+      background: #fff8ec;
+      border-left: 3px solid var(--accent);
+      border-radius: 0 4px 4px 0;
+      color: #5c3a0f;
+      font-size: .94em;
+    }
+    ul { padding-left: 1.3rem; }
+    ul li { margin: .25rem 0; }
+    .deps {
+      display: inline-block;
+      padding: .15rem .5rem;
+      margin-right: .35rem;
+      margin-bottom: .35rem;
+      background: var(--code-bg);
+      border-radius: 3px;
+      font-family: "JetBrains Mono", Menlo, monospace;
+      font-size: .82em;
+    }
+  </style>
+</head>
+<body>
+
+<h1>ccmux <span class="dim">— backend architecture</span></h1>
+<p class="lede">
+  A standalone Python library that mirrors Claude Code sessions running inside <code>tmux</code> into a small, stable Python API. Zero knowledge of any chat platform.
+</p>
+
+<h2>What it is</h2>
+<p>
+  <code>ccmux</code> watches tmux panes and Claude Code's JSONL transcripts, tracks <code>tool_use</code> / <code>tool_result</code> pairing, and exposes a single <code>Backend</code> Protocol that any frontend (Telegram bot, CLI, web UI) can drive. It owns three state files under <code>~/.ccmux/</code> and provides a <code>ccmux hook</code> CLI that Claude Code's <code>SessionStart</code> hook calls on every new session.
+</p>
+
+<p>External dependencies are minimal:</p>
+<p>
+  <span class="deps">libtmux</span>
+  <span class="deps">aiofiles</span>
+  <span class="deps">python-dotenv</span>
+</p>
+
+<h2>Public API — <code>ccmux.api</code></h2>
+<p>
+  Every symbol a frontend is allowed to see is re-exported from this one module. Everything else is internal and may change without notice.
+</p>
+
+<h3>The Protocol</h3>
+<p>Split into two sub-Protocols by domain. Tmux operations on <code>backend.tmux</code>, Claude-JSONL operations on <code>backend.claude</code>. Cross-domain queries and lifecycle stay at the top level.</p>
+<pre><code>class TmuxOps(Protocol):
+    async def send_text(window_id, text) -> tuple[bool, str]
+    async def send_keys(window_id, keys: list[str]) -> None
+    async def capture_pane(window_id) -> str
+    async def create_window(cwd, session_name=None) -> str
+    async def list_windows() -> list[TmuxWindow]
+
+class ClaudeOps(Protocol):
+    async def list_sessions(cwd) -> list[ClaudeSession]
+    async def get_history(session_id, *, start_byte=0,
+                          end_byte=None) -> tuple[list[dict], int]
+
+class Backend(Protocol):
+    tmux: TmuxOps
+    claude: ClaudeOps
+
+    # Cross-domain queries
+    def is_alive(window_id) -> bool
+    def get_window_binding(window_id) -> WindowBinding | None
+
+    # Lifecycle
+    async def start(on_message, on_status) -> None
+    async def stop() -> None</code></pre>
+<p>Call style: <code>await backend.tmux.send_text(wid, "hi")</code>, <code>await backend.claude.get_history(sid)</code>, <code>backend.is_alive(wid)</code>.</p>
+
+<h3>Event payloads (callbacks)</h3>
+<div class="grid">
+  <div class="card">
+    <h4>ClaudeMessage</h4>
+    <p>Passed to <code>on_message</code>. Fields: <code>session_id</code>, <code>role</code>, <code>content_type</code>, <code>text</code>, <code>tool_use_id</code>, <code>tool_name</code>, <code>image_data</code>, <code>timestamp</code>, <code>is_complete</code>.</p>
+  </div>
+  <div class="card">
+    <h4>WindowStatus</h4>
+    <p>Passed to <code>on_status</code>. Fields: <code>window_id</code>, <code>window_exists</code>, <code>pane_captured</code>, <code>status_text</code>, <code>interactive_ui</code>. No frontend routing fields.</p>
+  </div>
+  <div class="card">
+    <h4>InteractiveUIContent</h4>
+    <p>Nested in <code>WindowStatus</code>. Fields: <code>content</code>, <code>name</code> (the matched pattern label).</p>
+  </div>
+  <div class="card">
+    <h4>UsageInfo</h4>
+    <p>Returned by <code>parse_usage_output()</code>. Field: <code>parsed_lines</code> — cleaned content of the <code>/usage</code> modal.</p>
+  </div>
+</div>
+
+<h3>Query / listing types</h3>
+<div class="grid">
+  <div class="card">
+    <h4>WindowBinding</h4>
+    <p>Returned by <code>backend.get_window_binding()</code>. Fields: <code>window_id</code>, <code>session_name</code>, <code>claude_session_id</code>, <code>cwd</code>.</p>
+  </div>
+  <div class="card">
+    <h4>ClaudeSession</h4>
+    <p>Returned by <code>backend.claude.list_sessions()</code>. Fields: <code>session_id</code>, <code>summary</code>, <code>message_count</code>, <code>file_path</code>.</p>
+  </div>
+  <div class="card">
+    <h4>TmuxWindow</h4>
+    <p>Returned by <code>backend.tmux.list_windows()</code>. Fields: <code>window_id</code>, <code>cwd</code>, <code>pane_current_command</code>.</p>
+  </div>
+</div>
+
+<h3>Parsing helpers <span class="tag public">public</span></h3>
+<p>Used by the frontend when it <code>capture_pane</code>s and needs to parse the result locally (status line extraction, interactive-prompt detection, <code>/usage</code> modal, <code>!</code>-command output). Re-exported so frontends don't duplicate the regex zoo.</p>
+<ul>
+  <li><code>TranscriptParser</code> — JSONL → <code>ClaudeMessage</code> parser, also handles tool pairing</li>
+  <li><code>extract_bash_output(pane_text, command)</code> — extract <code>!</code>-command output from a pane</li>
+  <li><code>extract_interactive_content(pane_text)</code> — detect AskUserQuestion, ExitPlanMode, Permission, BashApproval, etc. (returns <code>None</code> if no prompt; use <code>is not None</code> for boolean check)</li>
+  <li><code>parse_status_line(pane_text)</code> — spinner + working text above chrome</li>
+  <li><code>parse_usage_output(pane_text)</code> — <code>/usage</code> modal parser</li>
+</ul>
+
+<h3>Composition</h3>
+<ul>
+  <li><code>DefaultBackend(tmux_registry, window_bindings, ...)</code> — the built-in implementation; frontend constructs it in its own <code>main.py</code></li>
+  <li><code>tmux_registry</code> — process-wide <code>TmuxSessionRegistry</code> singleton (convenience default)</li>
+  <li><code>TmuxSessionRegistry</code> / <code>WindowBindings</code> — exposed for composition</li>
+  <li><code>get_default_backend()</code> / <code>set_default_backend(b)</code> — for call sites that can't thread a backend handle through</li>
+  <li><code>sanitize_session_name(name, existing)</code> — make a string a legal tmux session name</li>
+</ul>
+
+<h2>Internal modules <span class="tag internal">internal</span></h2>
+<p>Not importable by frontends (the <code>test_api_boundary.py</code> tripwire rejects submodule imports).</p>
+<table>
+  <tr><th>Module</th><th>Owns</th></tr>
+  <tr><td><code>tmux.py</code></td><td><code>TmuxSession</code> (per-session libtmux wrapper), <code>TmuxSessionRegistry</code>, placeholder-free session creation</td></tr>
+  <tr><td><code>window_bindings.py</code></td><td><code>WindowBindings</code> — persistent <code>window_id ↔ (session_id, cwd)</code> map backed by <code>window_bindings.json</code></td></tr>
+  <tr><td><code>liveness.py</code></td><td><code>LivenessChecker</code> — <code>verify_all()</code> slow-loop probing pane foreground process; auto-resume dead Claude</td></tr>
+  <tr><td><code>message_monitor.py</code></td><td>Byte-offset incremental JSONL reader, mtime cache, <code>MonitorState</code> persistence, pending-tools map</td></tr>
+  <tr><td><code>status_monitor.py</code></td><td>Iterates <code>WindowBindings</code>, captures every bound pane, emits raw <code>WindowStatus</code></td></tr>
+  <tr><td><code>tmux_pane_parser.py</code></td><td>UI pattern regexes, status-line parser, pattern-drift warning</td></tr>
+  <tr><td><code>claude_transcript_parser.py</code></td><td>Low-level JSONL parsing, <code>PendingToolInfo</code>, tool-pair stitching</td></tr>
+  <tr><td><code>backend.py</code></td><td>Protocol definition + <code>DefaultBackend</code> with fast / slow poll loops</td></tr>
+  <tr><td><code>hook.py</code></td><td><code>ccmux hook</code> CLI — Claude Code <code>SessionStart</code> hook that writes <code>window_bindings.json</code></td></tr>
+  <tr><td><code>cli.py</code></td><td>Tiny argv dispatcher for the <code>ccmux</code> console script</td></tr>
+  <tr><td><code>config.py</code></td><td>Backend-only env vars; <code>config</code> singleton</td></tr>
+  <tr><td><code>util.py</code></td><td><code>ccmux_dir</code>, <code>atomic_write_json</code>, <code>has_session_map_entry</code></td></tr>
+</table>
+
+<h2>State files</h2>
+<p>Under <code>~/.ccmux/</code> by default (override with <code>CCMUX_DIR</code>):</p>
+<table>
+  <tr><th>File</th><th>Written by</th><th>Shape</th></tr>
+  <tr>
+    <td><code>window_bindings.json</code></td>
+    <td><code>ccmux hook</code> CLI</td>
+    <td><code>{tmux_session_name: {window_id, session_id, cwd}}</code></td>
+  </tr>
+  <tr>
+    <td><code>claude_monitor.json</code></td>
+    <td><code>MessageMonitor</code></td>
+    <td><code>{tracked_sessions: {session_id: {file_path, last_byte_offset}}}</code></td>
+  </tr>
+</table>
+<p class="note">
+  The frontend's own <code>telegram_tmux_map.json</code> is not owned by <code>ccmux</code> — it lives in the <code>ccmux_telegram</code> package, keyed by <code>(user_id, thread_id)</code>.
+</p>
+
+<h2>Data flow</h2>
+
+<h3>Claude → consumer (messages)</h3>
+<div class="flow">Claude writes JSONL
+  <span class="arrow">↓</span>
+MessageMonitor.poll() reads new bytes incrementally
+  <span class="arrow">↓</span>
+TranscriptParser.parse_entries() stitches tool_use ↔ tool_result
+  <span class="arrow">↓</span>
+DefaultBackend fast loop fires on_message(ClaudeMessage)
+  <span class="arrow">↓</span>
+Frontend consumer routes by session_id / window_id</div>
+
+<h3>Terminal pane → consumer (status)</h3>
+<div class="flow">Fast poll tick (every ~0.5s)
+  <span class="arrow">↓</span>
+StatusMonitor iterates WindowBindings.all()
+  <span class="arrow">↓</span>
+For each window_id: tm.capture_pane() + terminal parsers
+  <span class="arrow">↓</span>
+Emit WindowStatus (no user_id / thread_id fields)
+  <span class="arrow">↓</span>
+on_status(WindowStatus) fires; frontend resolves routing</div>
+
+<h3>User command → Claude (outbound)</h3>
+<div class="flow">Frontend receives user input
+  <span class="arrow">↓</span>
+backend.tmux.send_text(window_id, text)
+  <span class="arrow">↓</span>
+TmuxSessionRegistry routes window_id → TmuxSession
+  <span class="arrow">↓</span>
+TmuxSession.send_keys writes to the pane; Claude reads it</div>
+
+<h3>Session lifecycle (hook)</h3>
+<div class="flow">Claude Code starts up
+  <span class="arrow">↓</span>
+SessionStart hook fires → `ccmux hook` subprocess
+  <span class="arrow">↓</span>
+Hook writes {session:window_id → session_id, cwd} to window_bindings.json
+  <span class="arrow">↓</span>
+Backend slow loop reloads the map; verify_all() picks up the new window</div>
+
+<h2>What <code>ccmux</code> is <em>not</em></h2>
+<ul>
+  <li><strong>Not a bot.</strong> No Telegram, Slack, HTTP, or WebSocket code. Output is plain CommonMark Markdown (including <code>&gt;</code> blockquotes for collapsible regions) — it does not speak MarkdownV2, HTML, or any platform-specific dialect.</li>
+  <li><strong>Not stateful across topics / users / threads.</strong> All identity is <code>window_id</code> / <code>session_id</code>. If a frontend wants "whose turn is this", that's the frontend's problem.</li>
+  <li><strong>Not a transport layer.</strong> It doesn't know how <code>on_message</code> / <code>on_status</code> get delivered — they're plain Python callbacks.</li>
+  <li><strong>Not configurable by caller.</strong> No pluggable parsers, no strategy patterns. Swap the whole <code>Backend</code> implementation if you need different semantics.</li>
+</ul>
+
+<h2>Versioning promise</h2>
+<ul>
+  <li>Anything re-exported from <code>ccmux.api</code> is <strong>stable</strong>. Signature or semantic changes require a <strong>major</strong> bump.</li>
+  <li>Anything reachable only via <code>ccmux.&lt;submodule&gt;</code> is <strong>internal</strong>. Changes ship in <strong>minor</strong> or <strong>patch</strong> releases.</li>
+  <li>State-file schemas (<code>window_bindings.json</code>, <code>claude_monitor.json</code>) may evolve in minor releases with a best-effort migration; breaking changes trigger a major.</li>
+</ul>
+
+</body>
+</html>
