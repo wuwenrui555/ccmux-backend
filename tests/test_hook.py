@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import subprocess
 import sys
 from unittest.mock import MagicMock
@@ -9,6 +10,23 @@ from unittest.mock import MagicMock
 import pytest
 
 from ccmux.hook import _UUID_RE, _is_hook_installed, hook_main
+
+
+@pytest.fixture(autouse=True)
+def _reset_root_logger_handlers():
+    """Prevent handlers installed by hook_main from leaking across tests."""
+    root = logging.getLogger()
+    original = list(root.handlers)
+    try:
+        yield
+    finally:
+        for h in list(root.handlers):
+            if h not in original:
+                root.removeHandler(h)
+                try:
+                    h.close()
+                except Exception:
+                    pass
 
 
 class TestUuidRegex:
@@ -256,3 +274,61 @@ class TestHookSessionMapWrite:
         data = json.loads((tmp_path / "window_bindings.json").read_text())
         assert data["aclf"]["window_id"] == "@4"
         assert data["aclf"]["session_id"] == "aaaa0000-0000-0000-0000-000000000000"
+
+
+class TestHookFileLogging:
+    """hook.log in CCMUX_DIR captures invocations + unhandled exceptions."""
+
+    def test_hook_log_created_with_invocation_record(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["ccmux", "hook"])
+        monkeypatch.setattr(
+            sys,
+            "stdin",
+            io.StringIO(
+                json.dumps(
+                    {
+                        "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "cwd": "/home/user/project",
+                        "hook_event_name": "SessionStart",
+                    }
+                )
+            ),
+        )
+        monkeypatch.setenv("TMUX_PANE", "%0")
+        result = MagicMock()
+        result.stdout = "aclf:@4\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: result)
+
+        hook_main()
+
+        log_path = tmp_path / "hook.log"
+        assert log_path.exists()
+        content = log_path.read_text()
+        assert "550e8400" in content
+        assert "aclf" in content
+
+    def test_unhandled_exception_logged_with_traceback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A crash inside the hook body is written to hook.log before exit 1."""
+        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+
+        from ccmux import hook as hook_mod
+
+        def _boom() -> None:
+            raise RuntimeError("synthetic failure")
+
+        monkeypatch.setattr(hook_mod, "_hook_main_impl", _boom)
+
+        with pytest.raises(SystemExit) as exc:
+            hook_main()
+        assert exc.value.code == 1
+
+        log_path = tmp_path / "hook.log"
+        assert log_path.exists()
+        content = log_path.read_text()
+        assert "synthetic failure" in content
+        assert "Traceback" in content

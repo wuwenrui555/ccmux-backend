@@ -113,6 +113,7 @@ asyncio.run(main())
 - `window_bindings.json` — written by the `ccmux hook` CLI on Claude Code `SessionStart`
 - `claude_monitor.json` — per-session JSONL byte offsets, written by `MessageMonitor`
 - `drift.log` — created on first pane-parser drift warning (Claude Code UI change alert)
+- `hook.log` — appended by the `ccmux hook` CLI on every invocation; captures unhandled tracebacks for postmortems after Claude Code's inline error banner scrolls away
 
 ## Environment variables
 
