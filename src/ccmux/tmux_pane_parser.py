@@ -24,6 +24,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+from .parser_overrides import UIPattern  # re-exported for back-compat
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -49,26 +50,6 @@ class InteractiveUIContent:
 
     content: str  # The extracted display content
     name: str  # Pattern name that matched (e.g. "AskUserQuestion")
-
-
-@dataclass(frozen=True)
-class UIPattern:
-    """A text-marker pair that delimits an interactive UI region.
-
-    Extraction scans lines top-down: the first line matching any `top` pattern
-    marks the start, the first subsequent line matching any `bottom` pattern
-    marks the end.  Both boundary lines are included in the extracted content.
-
-    `top` and `bottom` are tuples of compiled regexes — any single match
-    is sufficient.  This accommodates wording changes across Claude Code
-    versions (e.g. a reworded confirmation prompt).
-    """
-
-    name: str  # Propagated to InteractiveUIContent.name; frontend uses it
-    # to pick a keyboard layout (e.g. a Telegram frontend's prompt module).
-    top: tuple[re.Pattern[str], ...]
-    bottom: tuple[re.Pattern[str], ...]
-    min_gap: int = 2  # minimum lines between top and bottom (inclusive)
 
 
 # ---------------------------------------------------------------------------
