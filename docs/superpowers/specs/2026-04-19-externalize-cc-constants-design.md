@@ -1,5 +1,10 @@
 # Design: externalize Claude-Code-coupled parser constants
 
+> **Note:** The module named `parser_overrides` here was renamed to
+> `parser_config` in v1.2.1; shadow detection and built-in datasets
+> moved into the same module. See
+> [2026-04-19-parser-config-centralization-design.md](2026-04-19-parser-config-centralization-design.md).
+
 Status: approved, ready for implementation plan
 Target release: ccmux-backend v1.2.0
 Date: 2026-04-19
