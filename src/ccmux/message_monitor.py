@@ -211,7 +211,8 @@ class MessageMonitor:
 
     Provides a `poll` method that performs a single scan cycle: detects
     window_bindings changes, reads new JSONL content, and returns ClaudeMessage
-    objects. The caller (bot.py) owns the polling loop.
+    objects. `DefaultBackend` drives the polling loop; standalone callers
+    may also invoke `poll` directly.
 
     Parameters
     ----------

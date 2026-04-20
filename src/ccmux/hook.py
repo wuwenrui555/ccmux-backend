@@ -4,9 +4,10 @@ Called by Claude Code's SessionStart hook to maintain a window ↔ session
 mapping in <CCMUX_DIR>/window_bindings.json. Also provides `--install` to
 auto-configure the hook in ~/.claude/settings.json.
 
-This module must NOT import config.py (which requires TELEGRAM_BOT_TOKEN),
-since hooks run inside tmux panes where bot env vars are not set.
-Config directory resolution uses util.ccmux_dir() (shared with config.py).
+This module deliberately avoids importing `config.py` so the hook stays
+cheap to start from inside a tmux pane (no dotenv load, no env parsing).
+Config directory resolution uses `util.ccmux_dir()` instead, which is
+shared with `config.py`.
 
 Key functions: hook_main() (CLI entry), _install_hook().
 """

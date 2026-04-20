@@ -127,7 +127,9 @@ class TmuxSession:
         """Remove sensitive env vars from the tmux session environment.
 
         Prevents new windows (and their child processes like Claude Code)
-        from inheriting secrets such as TELEGRAM_BOT_TOKEN.
+        from inheriting secrets the frontend has registered in
+        `SENSITIVE_ENV_VARS` (e.g. bot tokens, API keys). The backend
+        itself registers none; frontends append as needed.
         """
         for var in SENSITIVE_ENV_VARS:
             try:

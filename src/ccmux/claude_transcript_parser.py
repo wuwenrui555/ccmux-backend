@@ -379,9 +379,9 @@ class TranscriptParser:
 
         Prefixes every line with "> " so the output is valid CommonMark
         that any frontend can render. Frontends that want a collapsible
-        UI (e.g. Telegram expandable blockquote) detect the `> ` lines
-        and render them accordingly; plain-text consumers see readable
-        quoted lines.
+        UI (e.g. an expandable blockquote in a chat renderer) detect the
+        `> ` lines and render them accordingly; plain-text consumers see
+        readable quoted lines.
         """
         return "\n".join(f"> {line}" if line else ">" for line in text.split("\n"))
 

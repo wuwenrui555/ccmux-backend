@@ -65,7 +65,7 @@ class UIPattern:
     """
 
     name: str  # Propagated to InteractiveUIContent.name; frontend uses it
-    # to pick a keyboard layout (see ccmux_telegram/prompt.py).
+    # to pick a keyboard layout (e.g. a Telegram frontend's prompt module).
     top: tuple[re.Pattern[str], ...]
     bottom: tuple[re.Pattern[str], ...]
     min_gap: int = 2  # minimum lines between top and bottom (inclusive)
