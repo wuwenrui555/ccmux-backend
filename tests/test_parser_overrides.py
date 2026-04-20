@@ -37,3 +37,53 @@ def test_load_returns_empty_when_file_missing(
     assert result.simple_summary_fields == {}
     assert result.bare_summary_tools == frozenset()
     assert caplog.records == []  # no warning for absent file
+
+
+def _write_config(dir_: Path, data: dict) -> Path:
+    path = dir_ / "parser_config.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {
+                    "name": "Custom",
+                    "top": ["^Custom top"],
+                    "bottom": ["^Custom bottom"],
+                    "min_gap": 3,
+                }
+            ],
+            "skippable_overlays": ["^\\s*skipme"],
+            "status_spinners": ["★"],
+            "simple_summary_fields": {"NewTool": "arg"},
+            "bare_summary_tools": ["AnotherTool"],
+        },
+    )
+
+    result = po.load()
+
+    # ui_patterns (tuple per Task 1 fix)
+    assert len(result.ui_patterns) == 1
+    p = result.ui_patterns[0]
+    assert p.name == "Custom"
+    assert p.top[0].pattern == "^Custom top"
+    assert p.bottom[0].pattern == "^Custom bottom"
+    assert p.min_gap == 3
+
+    # skippable_overlays
+    assert len(result.skippable_overlays) == 1
+    assert result.skippable_overlays[0].pattern == "^\\s*skipme"
+
+    # status_spinners
+    assert result.status_spinners == frozenset({"★"})
+
+    # simple_summary_fields
+    assert result.simple_summary_fields == {"NewTool": "arg"}
+
+    # bare_summary_tools
+    assert result.bare_summary_tools == frozenset({"AnotherTool"})

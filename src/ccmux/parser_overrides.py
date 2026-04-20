@@ -8,6 +8,7 @@ sees its built-in constants unchanged. See
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -46,24 +47,81 @@ class ParserOverrides:
 
 
 _CONFIG_FILENAME = "parser_config.json"
+_SUPPORTED_SCHEMA_VERSION = 1
 
 
 def _config_path() -> Path:
     return ccmux_dir() / _CONFIG_FILENAME
 
 
-def load() -> ParserOverrides:
-    """Load overrides from `$CCMUX_DIR/parser_config.json`.
+def _parse_ui_patterns(raw: object) -> tuple[UIPattern, ...]:
+    if not isinstance(raw, list):
+        return ()
+    out: list[UIPattern] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        top_src = entry.get("top")
+        bottom_src = entry.get("bottom")
+        if (
+            not isinstance(name, str)
+            or not isinstance(top_src, list)
+            or not isinstance(bottom_src, list)
+        ):
+            continue
+        top = tuple(re.compile(p) for p in top_src if isinstance(p, str))
+        bottom = tuple(re.compile(p) for p in bottom_src if isinstance(p, str))
+        min_gap = entry.get("min_gap", 2)
+        if not isinstance(min_gap, int):
+            min_gap = 2
+        out.append(UIPattern(name=name, top=top, bottom=bottom, min_gap=min_gap))
+    return tuple(out)
 
-    Returns an empty `ParserOverrides` when the file is absent. Any
-    failure during parsing degrades to an empty override with a
-    WARNING; the bot never fails to start because of a bad file.
-    """
+
+def _parse_regex_list(raw: object) -> tuple[re.Pattern[str], ...]:
+    if not isinstance(raw, list):
+        return ()
+    compiled: list[re.Pattern[str]] = []
+    for src in raw:
+        if isinstance(src, str):
+            compiled.append(re.compile(src))
+    return tuple(compiled)
+
+
+def _parse_chars(raw: object) -> frozenset[str]:
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(s for s in raw if isinstance(s, str) and len(s) == 1)
+
+
+def _parse_str_dict(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def _parse_str_set(raw: object) -> frozenset[str]:
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(s for s in raw if isinstance(s, str))
+
+
+def load() -> ParserOverrides:
+    """Load overrides from `$CCMUX_DIR/parser_config.json`."""
     path = _config_path()
     if not path.exists():
         return ParserOverrides()
-    # Further cases added in Tasks 3-5.
-    return ParserOverrides()
+    raw = json.loads(path.read_text())
+    if raw.get("$schema_version") != _SUPPORTED_SCHEMA_VERSION:
+        return ParserOverrides()
+    return ParserOverrides(
+        ui_patterns=_parse_ui_patterns(raw.get("ui_patterns")),
+        skippable_overlays=_parse_regex_list(raw.get("skippable_overlays")),
+        status_spinners=_parse_chars(raw.get("status_spinners")),
+        simple_summary_fields=_parse_str_dict(raw.get("simple_summary_fields")),
+        bare_summary_tools=_parse_str_set(raw.get("bare_summary_tools")),
+    )
 
 
 OVERRIDES: ParserOverrides = load()
