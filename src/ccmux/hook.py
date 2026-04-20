@@ -44,6 +44,40 @@ def _encode_project_dir(cwd: str) -> str:
     """Return the `~/.claude/projects/<encoded>` basename for a launch cwd."""
     return re.sub(r"[/_.]", "-", cwd)
 
+
+def _find_claude_pid(shell_pid: int) -> int | None:
+    """Return the direct `claude` child PID of `shell_pid`, or None.
+
+    Uses `pgrep -P` to enumerate direct children, then matches argv0 of
+    `/proc/<pid>/cmdline`. We match by basename so either a bare `claude`
+    on $PATH or an absolute path like `/usr/local/bin/claude` is accepted.
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(shell_pid)],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    for token in result.stdout.split():
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+        cmdline_path = Path(f"/proc/{pid}/cmdline")
+        try:
+            raw = cmdline_path.read_bytes()
+        except OSError:
+            continue
+        argv0 = raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+        if Path(argv0).name == "claude":
+            return pid
+    return None
+
+
 # Claude Code's settings file, where hooks are configured
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 

@@ -9,7 +9,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ccmux.hook import _UUID_RE, _encode_project_dir, _is_hook_installed, hook_main
+from ccmux.hook import (
+    _UUID_RE,
+    _encode_project_dir,
+    _find_claude_pid,
+    _is_hook_installed,
+    hook_main,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -356,3 +362,72 @@ class TestEncodeProjectDir:
         self, cwd: str, expected: str
     ) -> None:
         assert _encode_project_dir(cwd) == expected
+
+
+class TestFindClaudePid:
+    def _mock_pgrep(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        children: list[int],
+        returncode: int = 0,
+    ) -> None:
+        """Make subprocess.run return the given children for any pgrep call."""
+        result = MagicMock()
+        result.stdout = "\n".join(str(c) for c in children) + (
+            "\n" if children else ""
+        )
+        result.returncode = returncode
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: result)
+
+    def _mock_cmdline(
+        self, monkeypatch: pytest.MonkeyPatch, mapping: dict[int, str]
+    ) -> None:
+        """Make `/proc/<pid>/cmdline` reads return mapping[pid] as argv0."""
+        from ccmux import hook as hook_mod
+
+        def fake_read_bytes(self: "Path") -> bytes:  # type: ignore[name-defined]
+            parts = self.parts
+            assert parts[1] == "proc" and parts[-1] == "cmdline", self
+            pid = int(parts[2])
+            if pid not in mapping:
+                raise FileNotFoundError(str(self))
+            return mapping[pid].encode() + b"\0--dangerously-skip-permissions\0"
+
+        monkeypatch.setattr(hook_mod.Path, "read_bytes", fake_read_bytes)
+
+    def test_returns_claude_child(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_pgrep(monkeypatch, [12345])
+        self._mock_cmdline(monkeypatch, {12345: "claude"})
+        assert _find_claude_pid(shell_pid=999) == 12345
+
+    def test_returns_claude_when_argv0_is_absolute_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_pgrep(monkeypatch, [12345])
+        self._mock_cmdline(monkeypatch, {12345: "/usr/local/bin/claude"})
+        assert _find_claude_pid(shell_pid=999) == 12345
+
+    def test_skips_non_claude_children(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_pgrep(monkeypatch, [100, 200, 300])
+        self._mock_cmdline(
+            monkeypatch,
+            {100: "vim", 200: "node", 300: "claude"},
+        )
+        assert _find_claude_pid(shell_pid=999) == 300
+
+    def test_returns_none_when_pgrep_has_no_match(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_pgrep(monkeypatch, [], returncode=1)
+        assert _find_claude_pid(shell_pid=999) is None
+
+    def test_returns_none_when_no_child_is_claude(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_pgrep(monkeypatch, [100, 200])
+        self._mock_cmdline(monkeypatch, {100: "vim", 200: "node"})
+        assert _find_claude_pid(shell_pid=999) is None
