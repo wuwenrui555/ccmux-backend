@@ -93,3 +93,35 @@ def test_get_by_window_id_routes_to_owning_session(registry, session_name, tmp_p
 
     routed = registry.get_by_window_id(wid)
     assert routed is tm
+
+
+def test_get_session_returns_none_for_missing_session(registry, session_name):
+    """get_session() must return None when the tmux session does not exist.
+
+    Regression: libtmux raises ObjectDoesNotExist (not LibTmuxException) when
+    no session matches. Previously _TMUX_ERRORS did not catch it, so any
+    caller that expected the documented "return None" contract crashed on
+    the very common new-session case.
+    """
+    tm = registry.get_or_create(session_name)
+    assert tm.get_session() is None
+
+
+def test_create_session_on_registry_entry_with_no_prior_tmux_session(
+    registry, session_name, tmp_path
+):
+    """create_session() succeeds for a freshly registered TmuxSession.
+
+    Regression for the `_create_session_and_bind` flow: the caller registers
+    a TmuxSession, probes existence via get_session(), then calls
+    create_session() on the None branch. The probe must not raise.
+    """
+    tm = registry.get_or_create(session_name)
+
+    assert tm.get_session() is None
+
+    ok, msg, _, wid = asyncio.run(
+        tm.create_session(work_dir=str(tmp_path), start_claude=False)
+    )
+    assert ok, msg
+    assert wid.startswith("@")

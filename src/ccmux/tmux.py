@@ -18,14 +18,21 @@ from pathlib import Path
 
 import libtmux
 import libtmux.exc
+from libtmux._internal.query_list import ObjectDoesNotExist as _ObjectDoesNotExist
 
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
 
-# Tuple used by libtmux call sites: libtmux's own errors plus OSError for
-# cases where libtmux shells out to the tmux binary (subprocess/IPC failures).
-_TMUX_ERRORS: tuple[type[BaseException], ...] = (libtmux.exc.LibTmuxException, OSError)
+# Tuple used by libtmux call sites: libtmux's own errors, ObjectDoesNotExist
+# (raised by `.sessions.get(...)` on misses and NOT a LibTmuxException
+# subclass), and OSError for cases where libtmux shells out to the tmux
+# binary (subprocess/IPC failures).
+_TMUX_ERRORS: tuple[type[BaseException], ...] = (
+    libtmux.exc.LibTmuxException,
+    _ObjectDoesNotExist,
+    OSError,
+)
 
 
 @dataclass
@@ -88,7 +95,13 @@ class TmuxSession:
             to reuse a single connection across all sessions; leave None for
             a standalone instance that lazily builds its own.
         """
-        self.session_name = session_name or config.tmux_session_name
+        # Explicit None check so an empty string from a confused caller is
+        # preserved (and then rejected by tmux with BadSessionName) rather
+        # than silently promoted to the configured default, which would
+        # write windows into the wrong session.
+        self.session_name = (
+            session_name if session_name is not None else config.tmux_session_name
+        )
         self._server: libtmux.Server | None = server
 
     @property
