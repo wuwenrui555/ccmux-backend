@@ -37,6 +37,13 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 # clear log line instead of a cryptic tmux error.
 _PANE_RE = re.compile(r"^%\d+$")
 
+# Claude Code derives its per-project transcript directory from the launch
+# cwd by replacing every `/`, `_`, and `.` with `-`. Verified against the
+# full listing of `~/.claude/projects/` on a live system.
+def _encode_project_dir(cwd: str) -> str:
+    """Return the `~/.claude/projects/<encoded>` basename for a launch cwd."""
+    return re.sub(r"[/_.]", "-", cwd)
+
 # Claude Code's settings file, where hooks are configured
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 

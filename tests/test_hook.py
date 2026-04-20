@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ccmux.hook import _UUID_RE, _is_hook_installed, hook_main
+from ccmux.hook import _UUID_RE, _encode_project_dir, _is_hook_installed, hook_main
 
 
 @pytest.fixture(autouse=True)
@@ -332,3 +332,27 @@ class TestHookFileLogging:
         content = log_path.read_text()
         assert "synthetic failure" in content
         assert "Traceback" in content
+
+
+class TestEncodeProjectDir:
+    @pytest.mark.parametrize(
+        "cwd, expected",
+        [
+            ("/mnt/md0/home/wenruiwu", "-mnt-md0-home-wenruiwu"),
+            ("/mnt/md0/home/wenruiwu/.claude", "-mnt-md0-home-wenruiwu--claude"),
+            (
+                "/mnt/md0/home/wenruiwu/obsidian_notes",
+                "-mnt-md0-home-wenruiwu-obsidian-notes",
+            ),
+            (
+                "/mnt/md0/home/wenruiwu/projects/aclf_review",
+                "-mnt-md0-home-wenruiwu-projects-aclf-review",
+            ),
+            ("/tmp", "-tmp"),
+        ],
+        ids=["plain", "dotfile", "underscore", "nested-underscore", "short"],
+    )
+    def test_matches_claude_project_dir_naming(
+        self, cwd: str, expected: str
+    ) -> None:
+        assert _encode_project_dir(cwd) == expected
