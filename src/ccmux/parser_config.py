@@ -6,9 +6,6 @@ optional user overrides from ``$CCMUX_DIR/parser_config.json``, and
 exposes the composed public constants so parser modules can eventually
 import them directly rather than re-deriving the composition locally.
 
-Currently coexists with parser_overrides.py (Task 2 of the v1.2.1
-hotfix). Task 3 will flip the import switch in the parser modules.
-
 Public constants (post-merge):
   - UI_PATTERNS
   - STATUS_SPINNERS
@@ -32,8 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Dataclasses (canonical home; parser_overrides.py still owns its own copies
-# for back-compat during the transition)
+# Dataclasses
 # ---------------------------------------------------------------------------
 
 

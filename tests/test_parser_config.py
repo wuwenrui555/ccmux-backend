@@ -10,7 +10,7 @@ from ccmux import parser_config as pc
 from ccmux.parser_config import UIPattern
 
 
-def test_private_overrides_singleton_is_parser_overrides_instance() -> None:
+def test_private_overrides_singleton_is_a_parser_overrides_dataclass() -> None:
     assert isinstance(pc._OVERRIDES, pc.ParserOverrides)
 
 
