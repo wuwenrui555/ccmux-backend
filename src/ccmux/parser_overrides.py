@@ -97,12 +97,8 @@ def _parse_ui_patterns(raw: object) -> tuple[UIPattern, ...]:
                 raise KeyError("top")
             if not isinstance(bottom_src, list):
                 raise KeyError("bottom")
-            top = tuple(
-                re.compile(p) for p in top_src if isinstance(p, str)
-            )
-            bottom = tuple(
-                re.compile(p) for p in bottom_src if isinstance(p, str)
-            )
+            top = tuple(re.compile(p) for p in top_src if isinstance(p, str))
+            bottom = tuple(re.compile(p) for p in bottom_src if isinstance(p, str))
             min_gap_raw = entry.get("min_gap", 2)
             min_gap = min_gap_raw if isinstance(min_gap_raw, int) else 2
             out.append(UIPattern(name=name, top=top, bottom=bottom, min_gap=min_gap))
@@ -142,9 +138,7 @@ def _parse_str_set(raw: object) -> frozenset[str]:
 def _log_shadows(overrides: ParserOverrides) -> None:
     for pattern in overrides.ui_patterns:
         if pattern.name in _BUILTIN_UI_PATTERN_NAMES:
-            logger.info(
-                "shadowing built-in ui_pattern '%s'", pattern.name
-            )
+            logger.info("shadowing built-in ui_pattern '%s'", pattern.name)
     for key, value in overrides.simple_summary_fields.items():
         if key in _BUILTIN_SIMPLE_SUMMARY_FIELDS:
             logger.info(

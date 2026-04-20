@@ -169,7 +169,9 @@ def test_unknown_schema_version_falls_back_with_warning(
     _write_config(isolated_ccmux_dir, {"$schema_version": 99})
     result = po.load()
     assert result == po.ParserOverrides()
-    assert any("schema_version" in r.message and "99" in r.message for r in caplog.records)
+    assert any(
+        "schema_version" in r.message and "99" in r.message for r in caplog.records
+    )
 
 
 def test_permission_error_falls_back_with_warning(
@@ -242,9 +244,7 @@ def test_shadow_simple_summary_field_logs_info_with_values(
     )
     po.load()
     assert any(
-        "Read" in r.message
-        and "file_path" in r.message
-        and "new_field" in r.message
+        "Read" in r.message and "file_path" in r.message and "new_field" in r.message
         for r in caplog.records
     )
 
