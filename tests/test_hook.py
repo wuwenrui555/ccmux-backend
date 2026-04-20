@@ -595,3 +595,133 @@ class TestResolveSessionViaPid:
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         # Note: no subprocess mock — the function should short-circuit before it.
         assert _resolve_session_via_pid("not-a-pane") is None
+
+
+class TestHookMainEmptyStdinFallback:
+    """When Claude Code sends empty stdin, hook_main must reconstruct
+    session_id + cwd via the PID fallback and still write window_bindings.json.
+    """
+
+    def _lay_out_claude_home(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+        *,
+        claude_pid: int,
+        launch_cwd: str,
+        new_session_id: str,
+    ) -> None:
+        claude_dir = tmp_path / ".claude"
+        (claude_dir / "sessions").mkdir(parents=True)
+        (claude_dir / "sessions" / f"{claude_pid}.json").write_text(
+            json.dumps({"pid": claude_pid, "cwd": launch_cwd})
+        )
+        project_dir = claude_dir / "projects" / _encode_project_dir(launch_cwd)
+        project_dir.mkdir(parents=True)
+        (project_dir / f"{new_session_id}.jsonl").write_text("{}\n")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    def _dispatch_subprocess(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        shell_pid: int,
+        claude_pid: int,
+        tmux_window: str,
+    ) -> None:
+        def fake_run(cmd, *args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            if cmd[0] == "tmux" and "#{pane_pid}" in cmd:
+                result.stdout = f"{shell_pid}\n"
+            elif cmd[0] == "tmux":
+                result.stdout = tmux_window
+            elif cmd[0] == "pgrep":
+                result.stdout = f"{claude_pid}\n"
+            else:
+                raise AssertionError(f"unexpected: {cmd}")
+            return result
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def _stub_cmdline(
+        self, monkeypatch: pytest.MonkeyPatch, claude_pid: int
+    ) -> None:
+        from ccmux import hook as hook_mod
+
+        original_read_bytes = hook_mod.Path.read_bytes
+
+        def fake_read_bytes(self: "Path") -> bytes:  # type: ignore[name-defined]
+            parts = self.parts
+            if len(parts) >= 3 and parts[1] == "proc" and parts[-1] == "cmdline":
+                if int(parts[2]) == claude_pid:
+                    return b"claude\0"
+                raise FileNotFoundError(str(self))
+            return original_read_bytes(self)
+
+        monkeypatch.setattr(hook_mod.Path, "read_bytes", fake_read_bytes)
+
+    def test_empty_stdin_triggers_fallback_and_writes_bindings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        # Isolate both CCMUX_DIR and ~/.claude from the real host.
+        ccmux_dir = tmp_path / "ccmux"
+        ccmux_dir.mkdir()
+        monkeypatch.setenv("CCMUX_DIR", str(ccmux_dir))
+
+        new_session_id = "99999999-9999-9999-9999-999999999999"
+        self._lay_out_claude_home(
+            monkeypatch,
+            tmp_path,
+            claude_pid=4242,
+            launch_cwd="/mnt/data/project",
+            new_session_id=new_session_id,
+        )
+        self._dispatch_subprocess(
+            monkeypatch,
+            shell_pid=9999,
+            claude_pid=4242,
+            tmux_window="ccmux:@16\n",
+        )
+        self._stub_cmdline(monkeypatch, claude_pid=4242)
+
+        monkeypatch.setattr(sys, "argv", ["ccmux", "hook"])
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))  # empty stdin
+        monkeypatch.setenv("TMUX_PANE", "%17")
+
+        hook_main()
+
+        data = json.loads((ccmux_dir / "window_bindings.json").read_text())
+        assert data["ccmux"]["window_id"] == "@16"
+        assert data["ccmux"]["session_id"] == new_session_id
+        assert data["ccmux"]["cwd"] == "/mnt/data/project"
+
+    def test_empty_stdin_with_failed_fallback_skips_silently(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """No claude child -> no write, but also no exception."""
+        ccmux_dir = tmp_path / "ccmux"
+        ccmux_dir.mkdir()
+        monkeypatch.setenv("CCMUX_DIR", str(ccmux_dir))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        def fake_run(cmd, *args, **kwargs):
+            result = MagicMock()
+            if cmd[0] == "tmux":
+                result.stdout = "1234\n"
+                result.returncode = 0
+            elif cmd[0] == "pgrep":
+                result.stdout = ""
+                result.returncode = 1
+            else:
+                raise AssertionError(f"unexpected: {cmd}")
+            return result
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(sys, "argv", ["ccmux", "hook"])
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        monkeypatch.setenv("TMUX_PANE", "%17")
+
+        hook_main()  # must not raise
+
+        assert not (ccmux_dir / "window_bindings.json").exists()

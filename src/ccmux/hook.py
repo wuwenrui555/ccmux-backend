@@ -345,7 +345,7 @@ def _hook_main_impl() -> None:
         logger.info("Hook install requested")
         sys.exit(_install_hook())
 
-    # Check tmux environment first — not in tmux means nothing to do
+    # Check tmux environment first — not in tmux means nothing to do.
     pane_id = os.environ.get("TMUX_PANE", "")
     if not pane_id:
         logger.debug("TMUX_PANE not set, not running in tmux — skipping")
@@ -354,35 +354,46 @@ def _hook_main_impl() -> None:
         logger.warning("Invalid TMUX_PANE format: %r — skipping", pane_id)
         return
 
-    # Read hook payload from stdin
+    # Read hook payload from stdin. Claude Code v2.1.x sometimes hands us
+    # empty/invalid stdin (notably on /clear), so we treat stdin as best-
+    # effort and fall back to PID-based resolution below.
     logger.debug("Processing hook event from stdin")
+    session_id = ""
+    cwd = ""
+    event = "SessionStart"
     try:
         payload = json.load(sys.stdin)
+        session_id = payload.get("session_id", "")
+        cwd = payload.get("cwd", "")
+        event = payload.get("hook_event_name", "SessionStart") or "SessionStart"
     except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("Failed to parse stdin JSON: %s", e)
-        return
-
-    session_id = payload.get("session_id", "")
-    cwd = payload.get("cwd", "")
-    event = payload.get("hook_event_name", "")
-
-    if not session_id or not event:
-        logger.debug("Empty session_id or event, ignoring")
-        return
-
-    if not _UUID_RE.match(session_id):
-        logger.warning("Invalid session_id format: %s", session_id)
-        return
-
-    # cwd is persisted so the auto-resume path in LivenessChecker._try_resume
-    # knows where to start Claude Code when a session needs to be revived.
-    if cwd and not os.path.isabs(cwd):
-        logger.warning("cwd is not absolute: %s", cwd)
-        cwd = ""
+        logger.debug("stdin not usable JSON (%s); will try PID fallback", e)
 
     if event != "SessionStart":
         logger.debug("Ignoring non-SessionStart event: %s", event)
         return
+
+    # cwd must be absolute to be trustworthy.
+    if cwd and not os.path.isabs(cwd):
+        logger.warning("cwd is not absolute: %s", cwd)
+        cwd = ""
+
+    # Fall back to PID-based resolution when stdin didn't deliver both a
+    # valid session_id and cwd. This recovers from the v2.1.x empty-stdin
+    # bug on /clear.
+    if not session_id or not _UUID_RE.match(session_id) or not cwd:
+        resolved = _resolve_session_via_pid(pane_id)
+        if resolved is None:
+            logger.debug(
+                "Could not resolve session via PID fallback; skipping"
+            )
+            return
+        session_id, cwd = resolved
+        logger.info(
+            "Resolved session via PID fallback: session_id=%s cwd=%s",
+            session_id,
+            cwd,
+        )
 
     # Get tmux session name and window ID for the pane running this hook
     result = subprocess.run(
