@@ -24,7 +24,10 @@ import logging
 import re
 from dataclasses import dataclass
 
-from .parser_overrides import UIPattern  # re-exported for back-compat
+from .parser_overrides import (
+    OVERRIDES,
+    UIPattern,
+)  # UIPattern re-exported for back-compat
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -56,7 +59,7 @@ class InteractiveUIContent:
 # UI pattern definitions (order matters — first match wins)
 # ---------------------------------------------------------------------------
 
-UI_PATTERNS: list[UIPattern] = [
+_BUILTIN_UI_PATTERNS: list[UIPattern] = [
     UIPattern(
         name="ExitPlanMode",
         top=(
@@ -132,6 +135,10 @@ UI_PATTERNS: list[UIPattern] = [
         ),
     ),
 ]
+
+# Public view after merging user-supplied overrides. User entries are
+# prepended so they match before the built-in patterns during scan.
+UI_PATTERNS: list[UIPattern] = list(OVERRIDES.ui_patterns) + _BUILTIN_UI_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -364,17 +371,21 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 # Spinner characters Claude Code uses in its status line
-STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+_BUILTIN_STATUS_SPINNERS: frozenset[str] = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+STATUS_SPINNERS: frozenset[str] = _BUILTIN_STATUS_SPINNERS | OVERRIDES.status_spinners
 
 # Overlay lines that may sit between the real spinner and the chrome.
 # These are transient Claude Code modals — e.g. the "How is Claude doing
 # this session?" rating prompt — that must not short-circuit spinner
 # detection. Scan-upward skips any line matching one of these patterns
 # and continues looking for the spinner above.
-_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+_BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Session-rating modal (CC 2.1.x+).
     re.compile(r"^\s*●\s*How is Claude doing this session\?"),
     re.compile(r"^\s*1:\s*Bad\b"),
+)
+_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    OVERRIDES.skippable_overlays + _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS
 )
 
 # Upper bound on how far above the chrome separator the real spinner can
