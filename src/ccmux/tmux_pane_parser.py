@@ -285,12 +285,11 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 # Absolute safety cap on how far above the chrome separator we'll scan.
-# Blanks, recognised overlay modals, and task-checklist lines are *free
-# skips* and do not count against this budget; only unknown lines bail
-# the scan immediately. This is a runaway guard for corrupted panes,
-# not a semantic limit — a real Claude Code pane never has more than a
-# few dozen chrome-above lines.
-_STATUS_SCAN_WINDOW = 100
+# Every iteration (blank, overlay, checklist, or unknown) consumes one
+# slot. Empirically the real layout is spinner + ≤20 TodoWrite rows +
+# blank + ≤2 overlay lines ≈ 24; 30 leaves headroom for subagent
+# stacking without risking runaway scans on corrupted panes.
+_STATUS_SCAN_WINDOW = 30
 
 
 def parse_status_line(pane_text: str) -> str | None:

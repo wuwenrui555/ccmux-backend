@@ -15,10 +15,11 @@ require a major bump.
   were treated as unknown text and bailed the upward scan, leaving
   Telegram status messages stale during long subagent or multi-step
   runs.
-- The upward scan budget (`_STATUS_SCAN_WINDOW`, now `100`) counts
-  only unknown lines. Blank lines, recognised overlay modals, and the
-  new checklist glyphs are free skips and do not consume the budget,
-  so arbitrarily long task lists no longer starve the scan.
+- The upward scan budget (`_STATUS_SCAN_WINDOW`) is raised from `10`
+  to `30` — empirically the real layout is spinner + ≤20 TodoWrite
+  rows + blank + ≤2 overlay lines ≈ 24; 30 leaves headroom for
+  subagent stacking. Unknown lines still bail the scan, so the larger
+  window doesn't raise false-positive risk.
 
 ### Added
 
