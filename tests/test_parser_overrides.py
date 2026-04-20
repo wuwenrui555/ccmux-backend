@@ -266,3 +266,39 @@ def test_no_shadow_no_info_log(
     po.load()
     shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
     assert shadow_records == []
+
+
+def test_successful_load_emits_summary_info(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "BrandNewUI", "top": ["^x$"], "bottom": ["^y$"]},
+            ],
+            "skippable_overlays": ["^overlay"],
+            "status_spinners": [],
+            "simple_summary_fields": {"BrandNewTool": "arg"},
+            "bare_summary_tools": [],
+        },
+    )
+    po.load()
+    summaries = [r for r in caplog.records if "loaded parser_config" in r.message]
+    assert len(summaries) == 1
+    msg = summaries[0].message
+    assert "ui_patterns=1" in msg
+    assert "skippable_overlays=1" in msg
+    assert "status_spinners=0" in msg
+    assert "simple_summary_fields=1" in msg
+    assert "bare_summary_tools=0" in msg
+
+
+def test_missing_file_emits_no_summary(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
+    po.load()
+    assert not any("loaded parser_config" in r.message for r in caplog.records)

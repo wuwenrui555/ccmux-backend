@@ -195,6 +195,16 @@ def load() -> ParserOverrides:
         simple_summary_fields=_parse_str_dict(raw.get("simple_summary_fields")),
         bare_summary_tools=_parse_str_set(raw.get("bare_summary_tools")),
     )
+    logger.info(
+        "loaded parser_config.json: "
+        "ui_patterns=%d, skippable_overlays=%d, status_spinners=%d, "
+        "simple_summary_fields=%d, bare_summary_tools=%d",
+        len(overrides.ui_patterns),
+        len(overrides.skippable_overlays),
+        len(overrides.status_spinners),
+        len(overrides.simple_summary_fields),
+        len(overrides.bare_summary_tools),
+    )
     _log_shadows(overrides)
     return overrides
 
