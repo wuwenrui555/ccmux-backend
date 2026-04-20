@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .parser_overrides import OVERRIDES
+from . import parser_config as _pc
 
 logger = logging.getLogger(__name__)
 
@@ -197,32 +197,6 @@ class TranscriptParser:
             result_lines.append(line.rstrip("\n"))
         return "\n".join(result_lines)
 
-    # One-field tools: tool name -> input dict key to surface as summary.
-    # When CC drifts a field name, edit here; shape is a table so the fix
-    # is a one-line change rather than hunting through if/elif.
-    _BUILTIN_SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
-        "Read": "file_path",
-        "Write": "file_path",
-        "Bash": "command",
-        "Grep": "pattern",
-        "Task": "description",
-        "WebFetch": "url",
-        "WebSearch": "query",
-        "Skill": "skill",
-    }
-    _SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
-        **_BUILTIN_SIMPLE_SUMMARY_FIELDS,
-        **OVERRIDES.simple_summary_fields,
-    }
-
-    # Tools that intentionally render as bare "**Name**" with no argument.
-    _BUILTIN_BARE_SUMMARY_TOOLS: frozenset[str] = frozenset(
-        {"TodoRead", "ExitPlanMode"}
-    )
-    _BARE_SUMMARY_TOOLS: frozenset[str] = (
-        _BUILTIN_BARE_SUMMARY_TOOLS | OVERRIDES.bare_summary_tools
-    )
-
     @classmethod
     def format_tool_use_summary(cls, name: str, input_data: dict | Any) -> str:
         """Format a tool_use block into a brief summary line.
@@ -243,8 +217,8 @@ class TranscriptParser:
             return f"**{name}**"
 
         summary = ""
-        if name in cls._SIMPLE_SUMMARY_FIELDS:
-            summary = input_data.get(cls._SIMPLE_SUMMARY_FIELDS[name], "")
+        if name in _pc.SIMPLE_SUMMARY_FIELDS:
+            summary = input_data.get(_pc.SIMPLE_SUMMARY_FIELDS[name], "")
         elif name == "Glob":
             # Glob accepts either a file_path scope or a pattern; prefer path.
             summary = input_data.get("file_path") or input_data.get("pattern", "")
@@ -262,7 +236,7 @@ class TranscriptParser:
                 q = questions[0]
                 if isinstance(q, dict):
                     summary = q.get("question", "")
-        elif name in cls._BARE_SUMMARY_TOOLS:
+        elif name in _pc.BARE_SUMMARY_TOOLS:
             summary = ""
         else:
             # Unknown tool: show first non-empty string value as a guess.

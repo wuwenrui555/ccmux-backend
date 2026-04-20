@@ -1,4 +1,4 @@
-"""Tests for ccmux.parser_overrides."""
+"""Tests for ccmux.parser_config."""
 
 import json
 import logging
@@ -6,17 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from ccmux import parser_overrides as po
-from ccmux.parser_overrides import OVERRIDES, ParserOverrides, UIPattern
+from ccmux import parser_config as pc
+from ccmux.parser_config import UIPattern
 
 
-def test_overrides_singleton_is_parser_overrides_instance() -> None:
-    assert isinstance(OVERRIDES, ParserOverrides)
+def test_private_overrides_singleton_is_a_parser_overrides_dataclass() -> None:
+    assert isinstance(pc._OVERRIDES, pc.ParserOverrides)
 
 
-def test_ui_pattern_is_defined_in_parser_overrides() -> None:
-    # UIPattern lives here to break the tmux_pane_parser circular import.
-    assert UIPattern.__module__ == "ccmux.parser_overrides"
+def test_ui_pattern_is_defined_in_parser_config() -> None:
+    assert UIPattern.__module__ == "ccmux.parser_config"
 
 
 @pytest.fixture
@@ -29,8 +28,8 @@ def isolated_ccmux_dir(monkeypatch, tmp_path):
 def test_load_returns_empty_when_file_missing(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
-    result = po.load()
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
+    result = pc.load()
     assert result.ui_patterns == ()
     assert result.skippable_overlays == ()
     assert result.status_spinners == frozenset()
@@ -65,9 +64,9 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
         },
     )
 
-    result = po.load()
+    result = pc.load()
 
-    # ui_patterns (tuple per Task 1 fix)
+    # ui_patterns (tuple)
     assert len(result.ui_patterns) == 1
     p = result.ui_patterns[0]
     assert p.name == "Custom"
@@ -92,7 +91,7 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
 def test_invalid_regex_in_ui_pattern_skips_entry(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
     _write_config(
         isolated_ccmux_dir,
         {
@@ -103,7 +102,7 @@ def test_invalid_regex_in_ui_pattern_skips_entry(
             ],
         },
     )
-    result = po.load()
+    result = pc.load()
     names = [p.name for p in result.ui_patterns]
     assert names == ["Good"]
     assert any("ui_patterns[0]" in r.message for r in caplog.records)
@@ -120,7 +119,7 @@ def test_missing_required_field_skipped(isolated_ccmux_dir: Path) -> None:
             ],
         },
     )
-    result = po.load()
+    result = pc.load()
     assert [p.name for p in result.ui_patterns] == ["Good"]
 
 
@@ -132,7 +131,7 @@ def test_non_single_char_spinner_rejected(isolated_ccmux_dir: Path) -> None:
             "status_spinners": ["✻", "abc", "", "✽"],
         },
     )
-    result = po.load()
+    result = pc.load()
     assert result.status_spinners == frozenset({"✻", "✽"})
 
 
@@ -147,7 +146,7 @@ def test_wrong_section_type_scoped_to_that_section(
             "bare_summary_tools": ["StillHere"],
         },
     )
-    result = po.load()
+    result = pc.load()
     assert result.ui_patterns == ()
     assert result.bare_summary_tools == frozenset({"StillHere"})
 
@@ -155,20 +154,20 @@ def test_wrong_section_type_scoped_to_that_section(
 def test_malformed_json_falls_back_with_warning(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
     (isolated_ccmux_dir / "parser_config.json").write_text("{not-json")
-    result = po.load()
-    assert result == po.ParserOverrides()
+    result = pc.load()
+    assert result == pc.ParserOverrides()
     assert any("invalid JSON" in r.message for r in caplog.records)
 
 
 def test_unknown_schema_version_falls_back_with_warning(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
     _write_config(isolated_ccmux_dir, {"$schema_version": 99})
-    result = po.load()
-    assert result == po.ParserOverrides()
+    result = pc.load()
+    assert result == pc.ParserOverrides()
     assert any(
         "schema_version" in r.message and "99" in r.message for r in caplog.records
     )
@@ -177,101 +176,21 @@ def test_unknown_schema_version_falls_back_with_warning(
 def test_permission_error_falls_back_with_warning(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="ccmux.parser_overrides")
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
     path = _write_config(isolated_ccmux_dir, {"$schema_version": 1})
     path.chmod(0o000)
     try:
-        result = po.load()
+        result = pc.load()
     finally:
         path.chmod(0o600)  # restore so teardown can clean up
-    assert result == po.ParserOverrides()
+    assert result == pc.ParserOverrides()
     assert any("parser_config" in r.message for r in caplog.records)
-
-
-# Names / keys known to exist in the built-in parser constants.
-# Kept here so the shadow tests don't depend on importing the parser
-# modules (which we haven't refactored yet).
-_BUILTIN_UI_PATTERN_NAMES = {
-    "ExitPlanMode",
-    "AskUserQuestion",
-    "PermissionPrompt",
-    "BashApproval",
-    "RestoreCheckpoint",
-    "Settings",
-}
-_BUILTIN_SIMPLE_SUMMARY_KEYS = {
-    "Read",
-    "Write",
-    "Bash",
-    "Grep",
-    "Task",
-    "WebFetch",
-    "WebSearch",
-    "Skill",
-}
-
-
-def test_shadow_ui_pattern_logs_info(
-    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
-    _write_config(
-        isolated_ccmux_dir,
-        {
-            "$schema_version": 1,
-            "ui_patterns": [
-                {"name": "ExitPlanMode", "top": ["^x$"], "bottom": ["^y$"]},
-            ],
-        },
-    )
-    po.load()
-    assert any(
-        "shadow" in r.message.lower() and "ExitPlanMode" in r.message
-        for r in caplog.records
-    )
-
-
-def test_shadow_simple_summary_field_logs_info_with_values(
-    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
-    _write_config(
-        isolated_ccmux_dir,
-        {
-            "$schema_version": 1,
-            "simple_summary_fields": {"Read": "new_field"},
-        },
-    )
-    po.load()
-    assert any(
-        "Read" in r.message and "file_path" in r.message and "new_field" in r.message
-        for r in caplog.records
-    )
-
-
-def test_no_shadow_no_info_log(
-    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
-    _write_config(
-        isolated_ccmux_dir,
-        {
-            "$schema_version": 1,
-            "ui_patterns": [
-                {"name": "BrandNewUI", "top": ["^x$"], "bottom": ["^y$"]},
-            ],
-            "simple_summary_fields": {"BrandNewTool": "arg"},
-        },
-    )
-    po.load()
-    shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
-    assert shadow_records == []
 
 
 def test_successful_load_emits_summary_info(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
     _write_config(
         isolated_ccmux_dir,
         {
@@ -285,7 +204,7 @@ def test_successful_load_emits_summary_info(
             "bare_summary_tools": [],
         },
     )
-    po.load()
+    pc.load()
     summaries = [r for r in caplog.records if "loaded parser_config" in r.message]
     assert len(summaries) == 1
     msg = summaries[0].message
@@ -299,6 +218,135 @@ def test_successful_load_emits_summary_info(
 def test_missing_file_emits_no_summary(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.INFO, logger="ccmux.parser_overrides")
-    po.load()
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    pc.load()
     assert not any("loaded parser_config" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Shadow helper unit tests (Step 5)
+# ---------------------------------------------------------------------------
+
+
+def test_log_ui_pattern_shadows_emits_for_matching_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    import re
+
+    user = (UIPattern(name="ExitPlanMode", top=(re.compile("^x$"),), bottom=()),)
+    builtin = [
+        UIPattern(name="ExitPlanMode", top=(re.compile("^y$"),), bottom=()),
+    ]
+    pc._log_ui_pattern_shadows(user, builtin)
+    assert any(
+        "shadow" in r.message.lower() and "ExitPlanMode" in r.message
+        for r in caplog.records
+    )
+
+
+def test_log_ui_pattern_shadows_silent_for_new_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    import re
+
+    user = (UIPattern(name="BrandNewUI", top=(re.compile("^x$"),), bottom=()),)
+    builtin = [
+        UIPattern(name="ExitPlanMode", top=(re.compile("^y$"),), bottom=()),
+    ]
+    pc._log_ui_pattern_shadows(user, builtin)
+    shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
+    assert shadow_records == []
+
+
+def test_log_summary_field_shadows_emits_with_old_and_new_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    user = {"Read": "new_field"}
+    builtin = {"Read": "file_path"}
+    pc._log_summary_field_shadows(user, builtin)
+    assert any(
+        "Read" in r.message and "file_path" in r.message and "new_field" in r.message
+        for r in caplog.records
+    )
+
+
+def test_log_summary_field_shadows_silent_for_new_key(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    user = {"BrandNewTool": "arg"}
+    builtin = {"Read": "file_path"}
+    pc._log_summary_field_shadows(user, builtin)
+    shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
+    assert shadow_records == []
+
+
+# ---------------------------------------------------------------------------
+# Shadow E2E tests using importlib.reload (Step 6)
+# ---------------------------------------------------------------------------
+
+
+def test_shadow_ui_pattern_logs_info_on_reload(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import importlib
+
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "ExitPlanMode", "top": ["^x$"], "bottom": ["^y$"]},
+            ],
+        },
+    )
+    importlib.reload(pc)
+    assert any(
+        "shadow" in r.message.lower() and "ExitPlanMode" in r.message
+        for r in caplog.records
+    )
+
+
+def test_shadow_simple_summary_field_logs_info_on_reload(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import importlib
+
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "simple_summary_fields": {"Read": "new_field"},
+        },
+    )
+    importlib.reload(pc)
+    assert any(
+        "Read" in r.message and "file_path" in r.message and "new_field" in r.message
+        for r in caplog.records
+    )
+
+
+def test_no_shadow_no_info_log_on_reload(
+    isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import importlib
+
+    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    _write_config(
+        isolated_ccmux_dir,
+        {
+            "$schema_version": 1,
+            "ui_patterns": [
+                {"name": "BrandNewUI", "top": ["^x$"], "bottom": ["^y$"]},
+            ],
+            "simple_summary_fields": {"BrandNewTool": "arg"},
+        },
+    )
+    importlib.reload(pc)
+    shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
+    assert shadow_records == []
