@@ -186,6 +186,14 @@ def _log_pattern_drift(lines: list[str]) -> None:
 def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
     """Extract content from an interactive UI in terminal output.
 
+    A live blocking UI (permission prompt, AskUserQuestion, ExitPlanMode,
+    Settings panel) always replaces Claude's input chrome — the `────\\n❯\\n
+    ────\\nstatusbar` sandwich at the pane bottom — so we short-circuit
+    when that chrome is still present. Any UI-looking text in that case
+    is scrollback (e.g., a pasted transcript) and must not trigger UI
+    detection. This also stops the status-line poller from spamming the
+    bound topic every tick.
+
     Tries each UI pattern in declaration order; first match wins.
     Returns None if no recognizable interactive UI is found.
 
@@ -198,6 +206,9 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
 
     lines = pane_text.strip().split("\n")
 
+    if _has_input_chrome(lines):
+        return None
+
     for pattern in _pc.UI_PATTERNS:
         result = _try_extract(lines, pattern)
         if result:
@@ -207,6 +218,37 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
         _log_pattern_drift(lines)
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Input chrome detection
+# ---------------------------------------------------------------------------
+
+# How far from the bottom to look for Claude's input chrome sandwich. The
+# real chrome always sits within the last few lines (separator, prompt,
+# separator, 1-4 status lines); 20 lines is a generous upper bound that
+# accommodates extra status widgets without catching scrollback.
+_CHROME_SEARCH_WINDOW = 20
+
+
+def _has_input_chrome(lines: list[str]) -> bool:
+    """True when Claude's input box is rendered at the pane bottom.
+
+    Pattern: a full-width ``────`` separator whose very next line starts
+    with ``❯`` (possibly with user-typed text after). Presence of this
+    sandwich means Claude is in WORKING or IDLE state — no blocking UI.
+    Absence means a UI has taken over the input region.
+    """
+    if not lines:
+        return False
+    search_start = max(0, len(lines) - _CHROME_SEARCH_WINDOW)
+    for i in range(search_start, len(lines) - 1):
+        stripped = lines[i].strip()
+        if len(stripped) < _CHROME_MIN_LEN or not all(c == "─" for c in stripped):
+            continue
+        if lines[i + 1].lstrip().startswith("❯"):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
