@@ -354,9 +354,10 @@ def _hook_main_impl() -> None:
         logger.warning("Invalid TMUX_PANE format: %r — skipping", pane_id)
         return
 
-    # Read hook payload from stdin. Claude Code v2.1.x sometimes hands us
-    # empty/invalid stdin (notably on /clear), so we treat stdin as best-
-    # effort and fall back to PID-based resolution below.
+    # Read hook payload from stdin. In rare cases stdin arrives empty or
+    # invalid (root cause unidentified; empirically NOT caused by /clear —
+    # startup/resume/clear all deliver full JSON), so we treat stdin as
+    # best-effort and fall back to PID-based resolution below.
     logger.debug("Processing hook event from stdin")
     session_id = ""
     cwd = ""
@@ -380,8 +381,8 @@ def _hook_main_impl() -> None:
         cwd = ""
 
     # Fall back to PID-based resolution when stdin didn't deliver both a
-    # valid session_id and cwd. This recovers from the v2.1.x empty-stdin
-    # bug on /clear.
+    # valid session_id and cwd. Covers the rare empty-stdin edge case
+    # above; specific trigger remains unknown.
     if not session_id or not _UUID_RE.match(session_id) or not cwd:
         resolved = _resolve_session_via_pid(pane_id)
         if resolved is None:
