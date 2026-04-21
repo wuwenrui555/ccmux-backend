@@ -9,6 +9,32 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.1.0 — 2026-04-21
+
+### Added
+
+- `UIPattern.walkback: bool`: when True, `extract_interactive_content`
+  expands the extracted region upward from the top anchor to the line
+  after the nearest full-width `────` separator. Captures the tool
+  preview block (`Read file` / `Read(/etc/passwd)`, `Bash command` /
+  `<command>`, `Enable auto mode?` + description) that sits above the
+  approval question. Enabled on the three permission patterns —
+  `PERMISSION_PROMPT` ("Do you want to …?" variants), the numbered-
+  options fallback, and `BASH_APPROVAL`.
+- New `PERMISSION_PROMPT` pattern anchored on `Enable \w+ mode\?` for
+  the Shift+Tab mode-toggle confirmation (auto / plan / …). Walkback
+  naturally carries back the banner and description.
+
+### Rationale
+
+Claude Code 2.1.x does not flush `tool_use` to JSONL until the turn
+completes, i.e. only after the user approves the tool. Frontends
+relying on a JSONL lookup for permission-prompt UI injection (see
+`ccmux-telegram` 2.1.0 drop of `tool_context`) find the cache empty
+and have no tool preview to render. The pane is the only source of
+truth during an active permission dialog; walkback makes the parser
+return it.
+
 ## 2.0.0 — 2026-04-20
 
 Refactor organizes the entire backend around a sealed four-case
