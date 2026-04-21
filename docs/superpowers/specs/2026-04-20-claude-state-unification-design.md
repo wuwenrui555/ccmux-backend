@@ -249,7 +249,7 @@ principle above, old state is abandoned on upgrade.
 
 ## Frontend impact (ccmux-telegram)
 
-Two consumer modules adapt to the new callbacks.
+Three consumer surfaces adapt.
 
 **`status_line.py`** becomes a `match` over `ClaudeState`:
 
@@ -267,6 +267,15 @@ async def on_state(instance_id: str, state: ClaudeState) -> None:
 - `Working` → `working`
 - `Idle` or `Blocked` → `waiting`
 - `Dead` → new `resuming` display state
+
+**`topic_bindings.py::is_alive()` + hot-path gates.**
+`backend.is_alive()` is gone. The frontend grows a small last-state
+cache (`{instance_id: ClaudeState}`, populated in `on_state`) and
+rewrites `topic_bindings.is_alive()` to read from it —
+`last_state.get(id) not in (None, Dead())`. The ~10 call sites in
+`message_out.py` / `command_basic.py` continue to call
+`_topics.is_alive(topic)` unchanged; only the internal implementation
+switches source of truth.
 
 Observable behaviour changes (visible to end users):
 
@@ -302,11 +311,20 @@ it from time-since-last-callback themselves.
   comparisons removed. Parser behaviour tests unchanged.
 - `tests/test_pane_state.py` — retire; merged into
   `test_claude_state.py` + `test_state_monitor.py`.
-- `tests/fake_backend.py` — emits `on_state` / `on_message` callbacks
-  matching the new `Backend` protocol.
-- `ccmux-telegram/tests/fake_backend.py`,
-  `tests/test_status_monitor.py`, `tests/test_watcher.py` — update
-  to the new callback shape and type family.
+- `tests/test_hook.py` — assertions switch from
+  `window_bindings.json` + `session_name` to
+  `claude_instances.json` + `instance_id`.
+- `tests/test_verify_all.py` — retire or merge into
+  `test_state_monitor.py` (the `verify_all` flow becomes
+  the slow-tick sub-probe of `state_monitor`).
+- `tests/fake_backend.py` — drop `is_alive` / `get_window_binding`;
+  emit `on_state` / `on_message` callbacks matching the new
+  `Backend` protocol.
+- ccmux-telegram `tests/fake_backend.py`,
+  `tests/test_status_monitor.py`, `tests/test_watcher.py`,
+  `tests/test_bindings.py` — update to the new callback shape and
+  type family; rewrite tests that relied on `backend.is_alive()`
+  to exercise the frontend-side last-state cache instead.
 
 **Fixture reuse:** every pane-text fixture
 (`sample_pane_*.txt` et al.) stays usable; they feed the new
