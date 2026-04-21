@@ -107,6 +107,30 @@ class TestDerivePaneState:
         input chrome still wins — the UI is what the user is looking at."""
         assert derive_pane_state(permission_pane, "ghost spinner") == PaneState.BLOCKED
 
+    def test_completion_line_classifies_as_idle(self):
+        """Regression: ``✻ Worked for 56s`` shares the spinner prefix but
+        represents a finished turn, not a running one. parse_status_line
+        must return None for completion lines so derive_pane_state
+        classifies the pane as IDLE (not WORKING). This stops the
+        frontend from creating a throwaway `Worked for 56s` status
+        bubble that then gets eaten by the next user message.
+        """
+        from ccmux.tmux_pane_parser import parse_status_line
+
+        pane = (
+            "some output\n"
+            "✻ Worked for 56s\n"
+            + self._chrome()
+            + "\n"
+            + "❯ \n"
+            + self._chrome()
+            + "\n"
+            + "  [Opus 4.7] 10% | wenruiwu\n"
+        )
+        status = parse_status_line(pane)
+        assert status is None
+        assert derive_pane_state(pane, status) == PaneState.IDLE
+
 
 class TestWindowStatusDefault:
     def test_pane_state_defaults_to_unknown(self) -> None:

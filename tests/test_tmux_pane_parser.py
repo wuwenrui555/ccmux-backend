@@ -18,17 +18,49 @@ class TestParseStatusLine:
     @pytest.mark.parametrize(
         ("spinner", "rest", "expected"),
         [
-            ("·", "Working on task", "Working on task"),
-            ("✻", "  Reading file  ", "Reading file"),
-            ("✽", "Thinking deeply", "Thinking deeply"),
-            ("✶", "Analyzing code", "Analyzing code"),
-            ("✳", "Processing input", "Processing input"),
-            ("✢", "Building project", "Building project"),
+            ("·", "Working on task…", "Working on task…"),
+            ("✻", "  Reading file…  ", "Reading file…"),
+            ("✽", "Thinking deeply…", "Thinking deeply…"),
+            ("✶", "Analyzing code…", "Analyzing code…"),
+            ("✳", "Processing input…", "Processing input…"),
+            ("✢", "Building project…", "Building project…"),
         ],
     )
     def test_spinner_chars(self, spinner: str, rest: str, expected: str, chrome: str):
+        """Running status: spinner char + text with `…` ellipsis.
+
+        Only running statuses should be surfaced; completion summaries
+        (`Worked for 56s`) still use a spinner char but lack the
+        ellipsis and are handled by the next parametrize block.
+        """
         pane = f"some output\n{spinner}{rest}\n{chrome}"
         assert parse_status_line(pane) == expected
+
+    @pytest.mark.parametrize(
+        ("spinner", "rest"),
+        [
+            ("✻", "Worked for 56s"),
+            ("✻", "Cogitated for 1m 25s"),
+            ("·", "Brewed for 2m 16s"),
+            ("✻", "Churned for 50s"),
+            ("·", "Sautéed for 45s"),
+        ],
+    )
+    def test_completion_lines_return_none(
+        self, spinner: str, rest: str, chrome: str
+    ):
+        """Completion lines (spinner + `Verbed for X` without ellipsis)
+        must NOT be treated as running status. Otherwise the Telegram
+        frontend creates a throwaway `Worked for 56s` bubble that then
+        gets eaten by the user's next message via
+        `_convert_status_to_content`, losing the timeline marker.
+
+        Required-`…` rule is the cheap, stable discriminator: every
+        observed running status contains U+2026, every completion
+        summary uses the `for <duration>` past-tense form without it.
+        """
+        pane = f"some output\n{spinner} {rest}\n{chrome}"
+        assert parse_status_line(pane) is None
 
     @pytest.mark.parametrize(
         "pane",
@@ -42,13 +74,13 @@ class TestParseStatusLine:
 
     def test_no_chrome_returns_none(self):
         """Without chrome separator, status can't be determined."""
-        pane = "output\n✻ Doing work\nno chrome here\n"
+        pane = "output\n✻ Doing work…\nno chrome here\n"
         assert parse_status_line(pane) is None
 
     def test_blank_line_between_status_and_chrome(self, chrome: str):
         """Status line with blank lines before separator."""
-        pane = f"output\n✻ Doing work\n\n{chrome}"
-        assert parse_status_line(pane) == "Doing work"
+        pane = f"output\n✻ Doing work…\n\n{chrome}"
+        assert parse_status_line(pane) == "Doing work…"
 
     def test_idle_no_status(self, chrome: str):
         """Idle pane (no status line above chrome) returns None."""
@@ -61,7 +93,7 @@ class TestParseStatusLine:
         assert parse_status_line(pane) is None
 
     def test_uses_fixture(self, sample_pane_status_line: str):
-        assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
+        assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py…"
 
     def test_rating_modal_does_not_hide_spinner(self, chrome: str):
         """When CC's "How is Claude doing this session?" modal appears
@@ -103,16 +135,16 @@ class TestParseStatusLine:
         """A checklist larger than the legacy 10-line scan window still
         finds the spinner — checklist lines are free-skip, not counted."""
         tasks = "\n".join(f"  ◻ Task {i}" for i in range(20))
-        pane = f"output\n✽ Running\n{tasks}\n\n{chrome}"
-        assert parse_status_line(pane) == "Running"
+        pane = f"output\n✽ Running…\n{tasks}\n\n{chrome}"
+        assert parse_status_line(pane) == "Running…"
 
     def test_all_checklist_glyphs_are_skippable(self, chrome: str):
         """Each glyph in STATUS_SKIP_GLYPHS must be free-skip."""
         from ccmux.parser_config import STATUS_SKIP_GLYPHS
 
         for glyph in STATUS_SKIP_GLYPHS:
-            pane = f"✽ Running\n  {glyph} Some task\n{chrome}"
-            assert parse_status_line(pane) == "Running", f"failed for glyph {glyph!r}"
+            pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
+            assert parse_status_line(pane) == "Running…", f"failed for glyph {glyph!r}"
 
     def test_checklist_only_no_spinner_returns_none(self, chrome: str):
         """Pane with task list but no spinner must not false-positive."""
@@ -133,7 +165,7 @@ class TestParseStatusLine:
     def test_checklist_plus_rating_modal(self, chrome: str):
         """Checklist and overlay modal can co-exist between spinner and chrome."""
         pane = (
-            "✶ Working on stuff\n"
+            "✶ Working on stuff…\n"
             "  ◼ Task 1\n"
             "  ◻ Task 2\n"
             "\n"
@@ -141,7 +173,7 @@ class TestParseStatusLine:
             "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
             f"{chrome}"
         )
-        assert parse_status_line(pane) == "Working on stuff"
+        assert parse_status_line(pane) == "Working on stuff…"
 
 
 # ── extract_interactive_content ──────────────────────────────────────────
