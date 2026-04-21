@@ -1,7 +1,7 @@
 """Session monitoring service — watches JSONL files for new messages.
 
 Runs an async polling loop that:
-  1. Reads active Claude session IDs from the WindowBindings.
+  1. Reads active Claude session IDs from the ClaudeInstanceRegistry.
   2. Reads new JSONL lines from each session file using byte-offset tracking.
   3. Parses entries via TranscriptParser and emits ClaudeMessage objects to a callback.
 
@@ -23,7 +23,7 @@ from .claude_transcript_parser import ClaudeMessage, TranscriptParser
 from .util import atomic_write_json
 
 if TYPE_CHECKING:
-    from .window_bindings import WindowBindings
+    from .claude_instance import ClaudeInstanceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ class MessageMonitor:
     """Monitors Claude Code sessions for new assistant messages.
 
     Provides a `poll` method that performs a single scan cycle: detects
-    window_bindings changes, reads new JSONL content, and returns ClaudeMessage
+    registry changes, reads new JSONL content, and returns ClaudeMessage
     objects. `DefaultBackend` drives the polling loop; standalone callers
     may also invoke `poll` directly.
 
@@ -244,7 +244,7 @@ class MessageMonitor:
         self,
         projects_path: Path | None = None,
         state_file: Path | None = None,
-        window_bindings: "WindowBindings | None" = None,
+        registry: "ClaudeInstanceRegistry | None" = None,
         show_user_messages: bool | None = None,
     ):
         self.projects_path = (
@@ -254,10 +254,10 @@ class MessageMonitor:
         self.state = MonitorState(state_file=state_file or config.monitor_state_file)
         self.state.load()
 
-        # Injected window registry — the authoritative source of active
+        # Injected instance registry — the authoritative source of active
         # Claude sessions. Left optional for test convenience; callers in
         # production (DefaultBackend) always pass one.
-        self._window_bindings = window_bindings
+        self._registry = registry
 
         # Controls whether user-typed messages are emitted. Default falls
         # back to the env-driven `config.show_user_messages` so existing
@@ -400,7 +400,7 @@ class MessageMonitor:
         Parameters
         ----------
         active_session_ids : set[str]
-            Session IDs currently present in window_bindings.
+            Session IDs currently present in the registry.
 
         Returns
         -------
@@ -412,7 +412,7 @@ class MessageMonitor:
         # Scan projects to get available session files
         sessions = await self.scan_claude_projects()
 
-        # Only process sessions that are in window_bindings
+        # Only process sessions that are in the registry
         for session_info in sessions:
             if session_info.session_id not in active_session_ids:
                 continue
@@ -509,16 +509,16 @@ class MessageMonitor:
         """One-time cleanup on bot startup.
 
         Removes tracked sessions not present in the current
-        `window_bindings.json` (cleans up leftover state from sessions
-        that no longer exist). No-op when no WindowBindings was injected
+        `claude_instances.json` (cleans up leftover state from sessions
+        that no longer exist). No-op when no registry was injected
         (test fixtures).
         """
-        if self._window_bindings is None:
+        if self._registry is None:
             return
 
         active_session_ids = {
             entry["session_id"]
-            for entry in self._window_bindings.raw.values()
+            for entry in self._registry.raw.values()
             if entry.get("session_id")
         }
         stale = [
@@ -533,37 +533,40 @@ class MessageMonitor:
                 self._file_mtimes.pop(sid, None)
             self.state.save_if_dirty()
 
-    async def poll(self) -> list[ClaudeMessage]:
+    async def poll(self) -> list[tuple[str, ClaudeMessage]]:
         """Perform a single scan cycle.
 
-        Reads active Claude session IDs from the WindowBindings (all bindings,
-        not just alive — monitor is resilient to temporarily dead bindings).
-        Returns ClaudeMessage objects for any new JSONL content.
-
-        Returns
-        -------
-        list[ClaudeMessage]
-            Newly detected messages across all active sessions.
+        Reads active Claude session IDs from the registry (all instances,
+        not just alive — monitor is resilient to temporarily dead
+        instances). Returns (instance_id, ClaudeMessage) pairs for any
+        new JSONL content. Orphan transcripts (no matching instance in
+        the registry) are skipped with no emission.
         """
-        # Poll every Claude session known to the registry. Filtering by
-        # topic-level liveness is a frontend concern; the monitor just
-        # reads JSONL, which is cheap for dead sessions (mtime cache skip).
-        if self._window_bindings is None:
+        if self._registry is None:
             return []
         active_session_ids = {
-            window.claude_session_id
-            for window in self._window_bindings.all()
-            if window.claude_session_id
+            inst.session_id for inst in self._registry.all() if inst.session_id
         }
 
         new_messages = await self.check_for_updates(active_session_ids)
 
+        pairs: list[tuple[str, ClaudeMessage]] = []
         for msg in new_messages:
             status = "complete" if msg.is_complete else "streaming"
             preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
             logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
 
-        return new_messages
+            inst = self._registry.find_by_session_id(msg.session_id)
+            if inst is None:
+                # Orphan transcript — no bound instance. Skip.
+                logger.debug(
+                    "No registry entry for session_id=%s; dropping message",
+                    msg.session_id,
+                )
+                continue
+            pairs.append((inst.instance_id, msg))
+
+        return pairs
 
     def shutdown(self) -> None:
         """Persist state on shutdown."""

@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING
 import aiofiles
 
 from .config import config
-from .window_bindings import ClaudeSession, WindowBindings
+from .claude_instance import ClaudeInstanceRegistry, ClaudeSession
 from .claude_transcript_parser import TranscriptParser
 
 if TYPE_CHECKING:
-    from .window_bindings import WindowBinding
+    from .claude_instance import ClaudeInstance
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 class ClaudeFileResolver:
     """Find and read Claude Code JSONL session files."""
 
-    def __init__(self, window_bindings: WindowBindings) -> None:
-        self._window_bindings = window_bindings
+    def __init__(self, registry: ClaudeInstanceRegistry) -> None:
+        self._registry = registry
 
     def build_path(self, claude_session_id: str, cwd: str) -> Path | None:
         if not claude_session_id or not cwd:
             return None
-        encoded = WindowBindings.encode_cwd(cwd)
+        encoded = ClaudeInstanceRegistry.encode_cwd(cwd)
         return config.claude_projects_path / encoded / f"{claude_session_id}.jsonl"
 
     async def find_file(self, claude_session_id: str, cwd: str = "") -> Path | None:
@@ -136,21 +136,21 @@ class ClaudeFileResolver:
             for e in parsed
         ]
 
-    async def read_messages_by_window(
+    async def read_messages_by_instance(
         self,
-        window: "WindowBinding",
+        instance: "ClaudeInstance",
         *,
         start_byte: int = 0,
         end_byte: int | None = None,
     ) -> list[dict]:
-        if not window.claude_session_id:
+        if not instance.session_id:
             return []
-        file_path = await self.find_file(window.claude_session_id, window.cwd)
+        file_path = await self.find_file(instance.session_id, instance.cwd)
         if not file_path:
             return []
         return await self.read_messages(
             file_path,
-            window.claude_session_id,
+            instance.session_id,
             start_byte=start_byte,
             end_byte=end_byte,
         )
