@@ -116,7 +116,8 @@ class TestParseStatusLine:
         assert parse_status_line(pane) is None
 
     def test_skips_through_task_checklist(self, chrome: str):
-        """TodoWrite checklist between spinner and chrome must not bail."""
+        """TodoWrite checklist between spinner and chrome must not bail;
+        task rows are collected and appended to the spinner text."""
         pane = (
             "some output\n"
             "✶ Exploring project context… (2m · ↑ 1.3k tokens)\n"
@@ -126,28 +127,35 @@ class TestParseStatusLine:
             "\n"
             f"{chrome}"
         )
-        assert (
-            parse_status_line(pane) == "Exploring project context… (2m · ↑ 1.3k tokens)"
+        assert parse_status_line(pane) == (
+            "Exploring project context… (2m · ↑ 1.3k tokens)\n"
+            "  ◼ Explore ccmux-telegram project context\n"
+            "  ◻ Ask clarifying questions on both UX issues\n"
+            "  ◻ Propose approaches"
         )
 
     def test_skips_through_elbow_connector_on_first_task(self, chrome: str):
         """First checklist row uses the `⎿` elbow to connect to the spinner
         line above (`  ⎿  ◼ First task`). The upward scan must treat this
         compound elbow-plus-checkbox form as skippable — otherwise it bails
-        on the elbow and the spinner is never reached."""
+        on the elbow and the spinner is never reached. All four rows are
+        also collected into the returned status text."""
         pane = (
             "some output\n"
             "· Auditing WindowStatus / PaneState usage… (1m 6s · thinking)\n"
-            "  ⎿  ◼ Audit current WindowStatus / PaneState usage\n"
-            "     ◻ Clarify refactor scope with user\n"
+            "  ⎿  ◼ Audit WindowStatus usage\n"
+            "     ◻ Clarify refactor scope\n"
             "     ◻ Propose refactor approaches\n"
-            "     ◻ Write design doc and gate on user review\n"
+            "     ◻ Write design doc\n"
             "\n"
             f"{chrome}"
         )
-        assert (
-            parse_status_line(pane)
-            == "Auditing WindowStatus / PaneState usage… (1m 6s · thinking)"
+        assert parse_status_line(pane) == (
+            "Auditing WindowStatus / PaneState usage… (1m 6s · thinking)\n"
+            "  ⎿  ◼ Audit WindowStatus usage\n"
+            "     ◻ Clarify refactor scope\n"
+            "     ◻ Propose refactor approaches\n"
+            "     ◻ Write design doc"
         )
 
     def test_lone_elbow_tool_output_still_bails(self, chrome: str):
@@ -172,16 +180,21 @@ class TestParseStatusLine:
 
     def test_skips_through_long_task_checklist(self, chrome: str):
         """A checklist larger than the legacy 10-line scan window still
-        finds the spinner — checklist lines are free-skip, not counted."""
+        finds the spinner — checklist lines are free-skip, not counted.
+        All rows are collected; truncation only kicks in per-line if
+        any row is long."""
         tasks = "\n".join(f"  ◻ Task {i}" for i in range(20))
         pane = f"output\n✽ Running…\n{tasks}\n\n{chrome}"
-        assert parse_status_line(pane) == "Running…"
+        assert parse_status_line(pane) == f"Running…\n{tasks}"
 
     def test_all_checklist_glyphs_are_skippable(self, chrome: str):
-        """Each built-in TodoWrite checkbox glyph must be free-skip."""
+        """Each built-in TodoWrite checkbox glyph must be free-skip and
+        its row must be collected into the returned status text."""
         for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
             pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
-            assert parse_status_line(pane) == "Running…", f"failed for glyph {glyph!r}"
+            assert (
+                parse_status_line(pane) == f"Running…\n  {glyph} Some task"
+            ), f"failed for glyph {glyph!r}"
 
     def test_checklist_only_no_spinner_returns_none(self, chrome: str):
         """Pane with task list but no spinner must not false-positive."""
@@ -200,7 +213,8 @@ class TestParseStatusLine:
         assert parse_status_line(pane) is None
 
     def test_checklist_plus_rating_modal(self, chrome: str):
-        """Checklist and overlay modal can co-exist between spinner and chrome."""
+        """Checklist and overlay modal can co-exist between spinner and chrome;
+        checklist rows get collected, rating-modal rows do not."""
         pane = (
             "✶ Working on stuff…\n"
             "  ◼ Task 1\n"
@@ -210,48 +224,131 @@ class TestParseStatusLine:
             "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
             f"{chrome}"
         )
-        assert parse_status_line(pane) == "Working on stuff…"
+        assert parse_status_line(pane) == ("Working on stuff…\n  ◼ Task 1\n  ◻ Task 2")
 
     def test_skips_todowrite_pending_tail(self, chrome: str):
         """When a TodoWrite list exceeds the render window, CC appends a
         `      … +N pending[, M completed]` tail between the last visible
-        checkbox and the chrome. That tail is not a checkbox, not a
-        spinner, and not a rating-modal line — without explicit handling
-        `parse_status_line` bails on it and the spinner never surfaces."""
+        checkbox and the chrome. The tail must be skipped during scan AND
+        collected into the returned status text alongside the checklist."""
         pane = (
             "✽ Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)\n"
             "  ⎿  ◼ Task A1: claude_state.py + types\n"
-            "     ◻ Execute plan via superpowers:subagent-driven-development\n"
+            "     ◻ Execute plan via subagent-driven-dev\n"
             "     ◻ Task A2: BlockedUI into tmux_pane_parser\n"
             "      … +7 pending\n"
             f"{chrome}"
         )
-        assert (
-            parse_status_line(pane)
-            == "Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)"
+        assert parse_status_line(pane) == (
+            "Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)\n"
+            "  ⎿  ◼ Task A1: claude_state.py + types\n"
+            "     ◻ Execute plan via subagent-driven-dev\n"
+            "     ◻ Task A2: BlockedUI into tmux_pane_parser\n"
+            "      … +7 pending"
         )
 
     def test_skips_todowrite_pending_and_completed_tail(self, chrome: str):
         """CC's tail variant also reports already-finished tasks, e.g.
-        `      … +6 pending, 1 completed`. Same skip rule applies."""
+        `      … +6 pending, 1 completed`. Same skip-and-collect rule."""
         pane = (
             "✶ Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)\n"
-            "  ⎿  ◼ Task A2: BlockedUI into tmux_pane_parser\n"
-            "     ◻ Task B1: Frontend StateCache + is_alive rewire\n"
+            "  ⎿  ◼ Task A2: BlockedUI into pane_parser\n"
+            "     ◻ Task B1: Frontend StateCache rewire\n"
             "      … +6 pending, 1 completed\n"
             f"{chrome}"
         )
-        assert (
-            parse_status_line(pane)
-            == "Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)"
+        assert parse_status_line(pane) == (
+            "Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)\n"
+            "  ⎿  ◼ Task A2: BlockedUI into pane_parser\n"
+            "     ◻ Task B1: Frontend StateCache rewire\n"
+            "      … +6 pending, 1 completed"
         )
+
+    # ── TodoWrite content is appended to spinner text ───────────────────
+
+    def test_todowrite_rows_appended_to_spinner(self, chrome: str):
+        """When a TodoWrite checklist is present above the spinner, every
+        task row (and the overflow tail) is appended to the returned
+        status text, one row per line. The spinner stays on the first
+        line; task rows follow in top-to-bottom visual order. Leading
+        whitespace is preserved so `◼` versus `◻` remains legible in
+        the Telegram render."""
+        pane = (
+            "✶ Nesting… (12s · thinking)\n"
+            "  ⎿  ◼ Refactor types layer\n"
+            "     ◻ Refactor data layer\n"
+            "     ◻ Refactor parser module\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == (
+            "Nesting… (12s · thinking)\n"
+            "  ⎿  ◼ Refactor types layer\n"
+            "     ◻ Refactor data layer\n"
+            "     ◻ Refactor parser module"
+        )
+
+    def test_todowrite_overflow_tail_is_appended(self, chrome: str):
+        """The `… +N pending[, M completed]` overflow row must be
+        included in the appended content, same as checkbox rows."""
+        pane = (
+            "✽ Brewing… (5m · thinking)\n"
+            "  ⎿  ◼ Task 1\n"
+            "     ◻ Task 2\n"
+            "      … +8 pending, 2 completed\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == (
+            "Brewing… (5m · thinking)\n"
+            "  ⎿  ◼ Task 1\n"
+            "     ◻ Task 2\n"
+            "      … +8 pending, 2 completed"
+        )
+
+    def test_rating_modal_is_skipped_not_appended(self, chrome: str):
+        """Overlay lines (session-rating modal) are skipped during the
+        scan AND NOT appended — the user shouldn't see them rendered
+        as part of Claude's working context. TodoWrite rows in the
+        same pane still appear in the output."""
+        pane = (
+            "✶ Working on stuff…\n"
+            "  ◼ Task 1\n"
+            "  ◻ Task 2\n"
+            "\n"
+            "● How is Claude doing this session? (optional)\n"
+            "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == ("Working on stuff…\n  ◼ Task 1\n  ◻ Task 2")
+
+    def test_long_task_row_truncated_to_50_chars(self, chrome: str):
+        """Task rows longer than 50 characters get truncated to the
+        first 50 characters with an ellipsis appended, so a pane with
+        verbose task names doesn't blow up the Telegram status message
+        size. The spinner line itself is not truncated."""
+        long_task = "  ◼ " + "A" * 80
+        pane = f"✽ Running…\n{long_task}\n{chrome}"
+        assert parse_status_line(pane) == ("Running…\n" + long_task[:50] + "…")
+
+    def test_task_row_at_50_chars_not_truncated(self, chrome: str):
+        """Exactly 50 characters stays unchanged — truncation is
+        strictly for rows longer than the limit."""
+        task = "  ◼ " + "X" * 46  # 4 + 46 = 50
+        assert len(task) == 50
+        pane = f"✽ Running…\n{task}\n{chrome}"
+        assert parse_status_line(pane) == f"Running…\n{task}"
+
+    def test_no_todowrite_returns_single_line(self, chrome: str):
+        """Backward compat: panes without TodoWrite content return the
+        spinner text as a single line, same as before v2.3.0."""
+        pane = f"some output\n✻ Doing work…\n{chrome}"
+        assert parse_status_line(pane) == "Doing work…"
 
     def test_realistic_long_todowrite_pane(self):
         """Verbatim live pane captured from Claude Code 2.1.x while it
         was building a 12-task TodoWrite plan. Exercises the full stack:
         elbow connector on row 1, 4 bare checkbox rows, the overflow
         tail line, plus the real chrome + status bar below. The spinner
-        `✶ Nesting… (12s · thinking)` must come back intact."""
+        plus every TodoWrite row must come back joined by newlines."""
         pane = (
             "✶ Nesting… (12s · thinking)\n"
             "  ⎿  ◻ Refactor foo 类型层 (foo.types)\n"
@@ -271,7 +368,15 @@ class TestParseStatusLine:
             "  Weekly ███░░░░░░░ 32% (2d 10h / Weekly)\n"
             "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
         )
-        assert parse_status_line(pane) == "Nesting… (12s · thinking)"
+        assert parse_status_line(pane) == (
+            "Nesting… (12s · thinking)\n"
+            "  ⎿  ◻ Refactor foo 类型层 (foo.types)\n"
+            "     ◻ Refactor foo 数据层 (foo.data / models)\n"
+            "     ◻ Refactor foo 解析层 (foo.parser)\n"
+            "     ◻ Refactor foo 状态机 (foo.state)\n"
+            "     ◻ Refactor foo 监听层 (foo.monitor / watcher)\n"
+            "      … +7 pending"
+        )
 
 
 # ── extract_interactive_content ──────────────────────────────────────────
