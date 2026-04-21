@@ -372,11 +372,11 @@ def parse_status_line(pane_text: str) -> str | None:
 
     The status line (spinner + working text) lives above the chrome
     separator (a full line of `─` characters). We locate the separator
-    first, then scan upward, skipping blanks, recognised overlay modals
-    (e.g. the session-rating prompt), and task-checklist glyphs (e.g.
-    TodoWrite's ◼/◻). The scan returns the spinner when found and bails
-    on the first truly unknown line, which keeps stray `·` bullets in
-    regular output from producing false positives.
+    first, then scan upward, skipping blanks and lines matching any
+    pattern in ``_pc.SKIPPABLE_PATTERNS`` (overlay modals, TodoWrite
+    checkbox rows, overflow tail). The scan returns the spinner when
+    found and bails on the first truly unknown line, which keeps stray
+    `·` bullets in regular output from producing false positives.
 
     Only **running** status lines are returned. Completion summaries
     (``✻ Worked for 56s``, ``· Cogitated for 1m 25s``) share the spinner
@@ -405,18 +405,7 @@ def parse_status_line(pane_text: str) -> str | None:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped[0] in _pc.STATUS_SKIP_GLYPHS:
-            continue
-        # Checklist elbow: first TodoWrite row is rendered as
-        # `  ⎿  ◼ First task`, connecting the sub-list to the spinner
-        # above. Skip only this compound form — a lone `⎿  text` is
-        # generic tool output (`⎿  Installed 1 package`) and must still
-        # bail, otherwise the scan walks through scrollback.
-        if stripped[0] == "⎿":
-            after_elbow = stripped[1:].lstrip()
-            if after_elbow and after_elbow[0] in _pc.STATUS_SKIP_GLYPHS:
-                continue
-        if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
+        if any(p.search(line) for p in _pc.SKIPPABLE_PATTERNS):
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:
             text = stripped[1:].strip()

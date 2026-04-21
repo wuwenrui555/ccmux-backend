@@ -9,6 +9,39 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.2.1 — 2026-04-21
+
+### Fixed
+
+- `parse_status_line` bailed when CC's TodoWrite list overflowed the
+  render window and rendered a `… +N pending[, M completed]` tail
+  (indented) between the last checkbox and the chrome. The tail line
+  matched no existing skip rule, so the upward scan terminated on it
+  and the spinner never surfaced — the frontend saw the pane as
+  IDLE even though Claude was actively working.
+
+### Changed
+
+- Unified the three status-skip mechanisms (`STATUS_SKIP_GLYPHS`
+  frozenset, `SKIPPABLE_OVERLAY_PATTERNS` regex list, and the
+  inline `⎿+checkbox` compound check in `parse_status_line`) into a
+  single `SKIPPABLE_PATTERNS` regex tuple in `parser_config`. The
+  scanner now does one regex pass over each candidate line. Skip
+  semantics are unchanged for every case except the new overflow
+  tail.
+
+- `$CCMUX_DIR/parser_config.json` override schema collapses
+  `skippable_overlays` + `status_skip_glyphs` into a single
+  `skippable_patterns` regex list. No backwards compatibility — user
+  configs must migrate.
+
+### Tests
+
+- `test_skips_todowrite_pending_tail` and
+  `test_skips_todowrite_pending_and_completed_tail` cover the new
+  skip rule; existing checklist / elbow / rating-modal tests
+  continue to exercise the unified path.
+
 ## 2.2.0 — 2026-04-21
 
 ### Fixed
