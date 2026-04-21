@@ -9,6 +9,30 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.2.0 — 2026-04-21
+
+### Fixed
+
+- SessionStart hook's overwrite guard blocked `_try_resume` from
+  updating `claude_instances.json` after Claude exited and Backend
+  opened a fresh tmux window running `claude --resume <session_id>`.
+  The registry stayed pointing at the dead window, so StateMonitor
+  kept emitting `Dead`, auto-resume fired again, a new tmux window
+  was created every poll tick, and the user's tmux session
+  accumulated a zombie window per minute until manual cleanup.
+
+  Split the guard: reject only when `window_id` AND `session_id`
+  both differ (the original intent: a distinct Claude taking over
+  the same tmux session). When the new `session_id` matches, treat
+  the hook as a resume report and overwrite the entry so the
+  registry follows the live window.
+
+### Tests
+
+- `test_same_session_resume_updates_window` covers the new allow
+  path; `test_different_window_refuses_overwrite` continues to
+  cover the multi-Claude reject path.
+
 ## 2.1.0 — 2026-04-21
 
 ### Added
