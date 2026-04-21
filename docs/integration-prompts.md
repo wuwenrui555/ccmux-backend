@@ -112,6 +112,17 @@ BOT_PANE="${BOT_PANE:-__ccmux__:1.1}"
 BACKEND_DIR="${BACKEND_DIR:-$HOME/projects/ccmux-backend}"
 MAX_SAMPLES="${MAX_SAMPLES:-15}"
 
+# Always stop the test CC's cycle on exit so it does not keep
+# consuming tokens after the report. Fires on pass, fail, or
+# interrupt — use trap rather than a trailing command.
+cleanup() {
+    tmux send-keys -t "$TEST_PANE" Escape 2>/dev/null || true
+    sleep 1
+    tmux send-keys -t "$TEST_PANE" "/clear" Enter 2>/dev/null || true
+    echo "Test session cleared."
+}
+trap cleanup EXIT
+
 # Layer 1 + 2 — sample the live pane until the target state is
 # captured (or the attempt budget runs out). Layer 1 gates on
 # spinner + overflow tail both being visible; Layer 2 then feeds
