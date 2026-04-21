@@ -9,6 +9,15 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.5.1 — 2026-04-21
+
+### Fixed
+
+- Apply `ruff format` to `tests/test_tmux_pane_parser.py`. v2.5.0
+  landed on `main` with the file flagged by the CI
+  `ruff format --check` step; this hotfix reformats so CI on `main`
+  is green again. No behaviour change.
+
 ## 2.5.0 — 2026-04-21
 
 ### Changed (BREAKING)
