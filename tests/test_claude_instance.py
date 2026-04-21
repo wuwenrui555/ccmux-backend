@@ -89,12 +89,16 @@ class TestClaudeInstanceRegistry:
                 {
                     "alpha": {"window_id": "@5", "session_id": "s", "cwd": "/a"},
                     "empty": {"window_id": "", "session_id": "", "cwd": "/b"},
+                    "window_only": {"window_id": "@6", "session_id": "", "cwd": "/c"},
+                    "session_only": {"window_id": "", "session_id": "s2", "cwd": "/d"},
                 }
             )
         )
         reg = ClaudeInstanceRegistry(map_file=tmp_instances_file)
         assert reg.contains("alpha") is True
         assert reg.contains("empty") is False
+        assert reg.contains("window_only") is False
+        assert reg.contains("session_only") is False
         assert reg.contains("missing") is False
 
     def test_all_skips_windowless_entries(self, tmp_instances_file: Path) -> None:

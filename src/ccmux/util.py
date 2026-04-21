@@ -1,7 +1,7 @@
 """Shared utility helpers.
 
 Kept deliberately small: path resolution for the ccmux config dir,
-crash-safe JSON writes, and a `window_bindings.json` lookup helper.
+crash-safe JSON writes, and a `claude_instances.json` lookup helper.
 """
 
 import json
@@ -53,7 +53,7 @@ def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
 
 
 def has_session_map_entry(session_name: str) -> bool:
-    """Check if `window_bindings.json` has a populated entry for this session."""
+    """Check if `claude_instances.json` has a populated entry for this session."""
     from .config import config
 
     if not config.instances_file.exists():

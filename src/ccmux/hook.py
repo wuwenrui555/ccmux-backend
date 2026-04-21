@@ -429,7 +429,7 @@ def _hook_main_impl() -> None:
     # Read-modify-write with file locking to prevent concurrent hook races
     from .util import ccmux_dir
 
-    map_file = ccmux_dir() / "window_bindings.json"
+    map_file = ccmux_dir() / "claude_instances.json"
     map_file.parent.mkdir(parents=True, exist_ok=True)
 
     lock_path = map_file.with_suffix(".lock")
