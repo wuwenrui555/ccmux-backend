@@ -9,6 +9,27 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.2.2 — 2026-04-21
+
+Tests and tooling only. No code or API changes.
+
+### Tests
+
+- `test_realistic_long_todowrite_pane` in `test_tmux_pane_parser.py`
+  exercises the status-line skip stack against a verbatim pane
+  captured from a live CC 2.1.116 session building a 12-task
+  TodoWrite plan. Guards the v2.2.1 fix against regression on real
+  CC output rather than hand-forged fixture strings.
+
+### Docs
+
+- New `docs/integration-prompts.md` catalogues prompts that drive a
+  live CC session into specific UI states for end-to-end validation
+  of parser changes. Includes the 12-task TodoWrite overflow prompt
+  and a sampling-based three-layer verify script (pane, parser,
+  frontend log) with automatic `/clear` cleanup on exit. Workflow
+  is "Claude executes, user reads the summary".
+
 ## 2.2.1 — 2026-04-21
 
 ### Fixed

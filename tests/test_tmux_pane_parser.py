@@ -246,6 +246,33 @@ class TestParseStatusLine:
             == "Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)"
         )
 
+    def test_realistic_long_todowrite_pane(self):
+        """Verbatim live pane captured from Claude Code 2.1.x while it
+        was building a 12-task TodoWrite plan. Exercises the full stack:
+        elbow connector on row 1, 4 bare checkbox rows, the overflow
+        tail line, plus the real chrome + status bar below. The spinner
+        `✶ Nesting… (12s · thinking)` must come back intact."""
+        pane = (
+            "✶ Nesting… (12s · thinking)\n"
+            "  ⎿  ◻ Refactor foo 类型层 (foo.types)\n"
+            "     ◻ Refactor foo 数据层 (foo.data / models)\n"
+            "     ◻ Refactor foo 解析层 (foo.parser)\n"
+            "     ◻ Refactor foo 状态机 (foo.state)\n"
+            "     ◻ Refactor foo 监听层 (foo.monitor / watcher)\n"
+            "      … +7 pending\n"
+            "\n"
+            "──────────────────────────────────────────────────────────────"
+            "────────────────────────────────────────────\n"
+            "❯ \n"
+            "──────────────────────────────────────────────────────────────"
+            "────────────────────────────────────────────\n"
+            "  [Opus 4.7] ██░░░░░░░░ 15% | wenruiwu\n"
+            "  Usage ░░░░░░░░░░ 1% (4h 50m / 5h)\n"
+            "  Weekly ███░░░░░░░ 32% (2d 10h / Weekly)\n"
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+        )
+        assert parse_status_line(pane) == "Nesting… (12s · thinking)"
+
 
 # ── extract_interactive_content ──────────────────────────────────────────
 
