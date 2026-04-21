@@ -155,9 +155,7 @@ _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
 # is in this set are treated the same as blanks and overlays: skipped without
 # bailing and without consuming the bail-budget. This lets the spinner be found
 # above arbitrarily long task lists (subagent runs, multi-step plans).
-_BUILTIN_STATUS_SKIP_GLYPHS: frozenset[str] = frozenset(
-    ["◼", "◻", "☐", "☒", "✔", "✓"]
-)
+_BUILTIN_STATUS_SKIP_GLYPHS: frozenset[str] = frozenset(["◼", "◻", "☐", "☒", "✔", "✓"])
 
 # One-field tools: tool name -> input dict key to surface as summary.
 _BUILTIN_SIMPLE_SUMMARY_FIELDS: dict[str, str] = {

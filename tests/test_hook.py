@@ -361,9 +361,7 @@ class TestEncodeProjectDir:
         ],
         ids=["plain", "dotfile", "underscore", "nested-underscore", "short"],
     )
-    def test_matches_claude_project_dir_naming(
-        self, cwd: str, expected: str
-    ) -> None:
+    def test_matches_claude_project_dir_naming(self, cwd: str, expected: str) -> None:
         assert _encode_project_dir(cwd) == expected
 
 
@@ -376,9 +374,7 @@ class TestFindClaudePid:
     ) -> None:
         """Make subprocess.run return the given children for any pgrep call."""
         result = MagicMock()
-        result.stdout = "\n".join(str(c) for c in children) + (
-            "\n" if children else ""
-        )
+        result.stdout = "\n".join(str(c) for c in children) + ("\n" if children else "")
         result.returncode = returncode
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: result)
 
@@ -398,9 +394,7 @@ class TestFindClaudePid:
 
         monkeypatch.setattr(hook_mod.Path, "read_bytes", fake_read_bytes)
 
-    def test_returns_claude_child(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_claude_child(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._mock_pgrep(monkeypatch, [12345])
         self._mock_cmdline(monkeypatch, {12345: "claude"})
         assert _find_claude_pid(shell_pid=999) == 12345
@@ -412,9 +406,7 @@ class TestFindClaudePid:
         self._mock_cmdline(monkeypatch, {12345: "/usr/local/bin/claude"})
         assert _find_claude_pid(shell_pid=999) == 12345
 
-    def test_skips_non_claude_children(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_skips_non_claude_children(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._mock_pgrep(monkeypatch, [100, 200, 300])
         self._mock_cmdline(
             monkeypatch,
@@ -486,9 +478,7 @@ class TestResolveSessionViaPid:
                 result.stdout = f"{shell_pid}\n"
             elif cmd[0] == "pgrep":
                 result.stdout = (
-                    "\n".join(str(c) for c in children) + "\n"
-                    if children
-                    else ""
+                    "\n".join(str(c) for c in children) + "\n" if children else ""
                 )
                 result.returncode = 0 if children else 1
             else:
@@ -644,9 +634,7 @@ class TestHookMainEmptyStdinFallback:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-    def _stub_cmdline(
-        self, monkeypatch: pytest.MonkeyPatch, claude_pid: int
-    ) -> None:
+    def _stub_cmdline(self, monkeypatch: pytest.MonkeyPatch, claude_pid: int) -> None:
         from ccmux import hook as hook_mod
 
         original_read_bytes = hook_mod.Path.read_bytes

@@ -46,9 +46,7 @@ class TestParseStatusLine:
             ("·", "Sautéed for 45s"),
         ],
     )
-    def test_completion_lines_return_none(
-        self, spinner: str, rest: str, chrome: str
-    ):
+    def test_completion_lines_return_none(self, spinner: str, rest: str, chrome: str):
         """Completion lines (spinner + `Verbed for X` without ellipsis)
         must NOT be treated as running status. Otherwise the Telegram
         frontend creates a throwaway `Worked for 56s` bubble that then
@@ -514,9 +512,11 @@ class TestHasInputChrome:
         chrome predicate."""
         lines = (
             "● Some output\n"
-            + "─" * 8 + "\n"
+            + "─" * 8
+            + "\n"
             + "❯ 1. option\n"
-            + "─" * 8 + "\n"
+            + "─" * 8
+            + "\n"
             + "Esc to cancel\n"
         ).split("\n")
         assert _has_input_chrome(lines) is False
