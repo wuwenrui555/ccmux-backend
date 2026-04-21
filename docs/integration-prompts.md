@@ -62,54 +62,82 @@ package `foo`. Cover: types layer, data layer, parser, state machine,
 monitor, backend, public API, legacy-module cleanup, version bump,
 CHANGELOG, README, tests. Do not merge, shorten, or drop any.
 
-Then work through the plan one task at a time. For each: mark it
-`in_progress`, analyze what the refactor of that layer would involve
-in at least three paragraphs of detailed reasoning (interleaved
-thinking is fine), mark it `completed`, pick the next. Use no tools
-other than TodoWrite.
+Then cycle through the tasks. For each task:
 
-Do not look for the `foo` package on disk — it is a hypothetical
-planning exercise, not a real codebase.
+1. Mark it `in_progress` with TodoWrite.
+2. Spend extensive thinking time — at least 2000 tokens of interleaved
+   thinking — on every aspect of that layer's refactor: existing
+   structure, target structure, dependencies, migration order, tests,
+   rollback. All reasoning must stay inside thinking blocks. DO NOT
+   produce any visible response text between TodoWrite calls.
+3. Mark it `completed` with TodoWrite.
+
+Use no tools other than TodoWrite. Do not look for the `foo` package
+on disk — it is a hypothetical planning exercise.
 ```
 
 **Prompt design notes:**
 
-- No `Bash(sleep N)` loop: Claude Code's harness blocks standalone
-  long sleeps (`Blocked: standalone sleep 60. Use Monitor ...`), so
-  the keep-alive has to come from CC's own thinking time. Three
-  paragraphs of analysis per task sustains the `✻ Thinking…` spinner
-  long enough to capture multiple times across 12 iterations.
-- No meta-language (`load-test`, `I'm testing`, `treat this as an
-  instruction`): CC sessions sharing `MEMORY.md` with a meta-testing
-  session can pick up that context and ask for confirmation instead
-  of executing. The prompt reads as a normal planning request.
+- **No visible text between TodoWrite calls.** Any response text
+  Claude produces pushes the checklist out of the `parse_status_line`
+  scan window (it only looks at lines above the chrome separator).
+  Pure interleaved thinking keeps the checklist visible next to chrome
+  while the spinner is still active.
+- **≥2000 tokens of thinking per task** forces each window to last
+  ~30–60s instead of the 2–3s Claude would otherwise spend. Across
+  12 tasks this gives ~8 minutes of accumulated in-state dwell time
+  — plenty of chances for the sampling verify to hit.
+- **No `Bash(sleep N)` loop.** Claude Code's harness blocks standalone
+  long sleeps (`Blocked: standalone sleep 60. Use Monitor ...`). Even
+  the allowed `until`-loop form streams output that would push the
+  checklist up and out of scan range.
+- **No meta-language** (`load-test`, `I'm testing`, `treat this as a
+  load-test instruction`): Claude Code sessions that share
+  `MEMORY.md` with a meta-testing session can pick up that context
+  and stop to ask for confirmation. The prompt reads as an ordinary
+  planning request.
 
 **Verify** (Claude runs; user reads summary):
+
+The target state — spinner + checklist + overflow tail rendered
+together — is transient. It exists only between two TodoWrite calls
+while Claude is thinking. Layers 1 and 2 therefore sample the pane
+up to 15 times at 1-second intervals; the first sample that matches
+wins. Layer 3 is a one-shot log grep since events stay in scrollback.
 
 ```bash
 set -e
 TEST_PANE="${TEST_PANE:-test}"
 BOT_PANE="${BOT_PANE:-__ccmux__:1.1}"
 BACKEND_DIR="${BACKEND_DIR:-$HOME/projects/ccmux-backend}"
+MAX_SAMPLES="${MAX_SAMPLES:-15}"
 
-# Layer 1 — current visible pane shows spinner + overflow tail.
-# Do NOT include scrollback: `-S -N` would match historical spinners
-# from earlier turns and false-positive when CC is actually idle.
-pane="$(tmux capture-pane -p -t "$TEST_PANE")"
-echo "$pane" | grep -qE '(✶|✽|✻|✢|✳|·).+…'  || { echo "Layer 1 FAIL: no spinner"; exit 1; }
-echo "$pane" | grep -qE '… \+[0-9]+ (pending|completed)' || { echo "Layer 1 FAIL: no overflow tail"; exit 1; }
-echo "Layer 1 PASS"
+# Layer 1 + 2 — sample the live pane until the target state is
+# captured (or the attempt budget runs out). Layer 1 gates on
+# spinner + overflow tail both being visible; Layer 2 then feeds
+# that same pane snapshot into parse_status_line.
+l12_pass=0
+for attempt in $(seq 1 "$MAX_SAMPLES"); do
+    pane="$(tmux capture-pane -p -t "$TEST_PANE")"
+    if echo "$pane" | grep -qE '(✶|✽|✻|✢|✳|·).+…' \
+       && echo "$pane" | grep -qE '… \+[0-9]+ (pending|completed)'; then
+        parsed="$(echo "$pane" | uv run --project "$BACKEND_DIR" python -c \
+            'import sys; from ccmux.tmux_pane_parser import parse_status_line; r = parse_status_line(sys.stdin.read()); print(r if r else "__NONE__")')"
+        case "$parsed" in
+            *…*)
+                echo "Layer 1 PASS (sample $attempt/$MAX_SAMPLES)"
+                echo "Layer 2 PASS: $parsed"
+                l12_pass=1
+                break
+                ;;
+        esac
+    fi
+    sleep 1
+done
+[ "$l12_pass" = 1 ] || { echo "Layer 1/2 FAIL after $MAX_SAMPLES samples"; exit 1; }
 
-# Layer 2 — backend parser returns the spinner text
-parsed="$(echo "$pane" | uv run --project "$BACKEND_DIR" python -c \
-    'import sys; from ccmux.tmux_pane_parser import parse_status_line; r = parse_status_line(sys.stdin.read()); print(r if r else "__NONE__")')"
-case "$parsed" in
-    __NONE__|"") echo "Layer 2 FAIL: parse_status_line returned None"; exit 1 ;;
-    *…*)         echo "Layer 2 PASS: $parsed" ;;
-    *)           echo "Layer 2 FAIL: missing ellipsis: $parsed"; exit 1 ;;
-esac
-
-# Layer 3 — ccmux-telegram enqueued the status update
+# Layer 3 — ccmux-telegram enqueued the status update. Scrollback is
+# fine here: the log is append-only, we just want to see a recent entry.
 tmux capture-pane -p -t "$BOT_PANE" -S -500 \
   | grep "Enqueue status_update" | tail -3 \
   | grep -q "text='" || { echo "Layer 3 FAIL: no recent Enqueue status_update"; exit 1; }
