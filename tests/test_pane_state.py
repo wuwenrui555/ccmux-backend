@@ -88,7 +88,10 @@ class TestDerivePaneState:
         )
 
     def test_working_pane_is_working(self, working_pane):
-        assert derive_pane_state(working_pane, "Sublimating… (32s · …)") == PaneState.WORKING
+        assert (
+            derive_pane_state(working_pane, "Sublimating… (32s · …)")
+            == PaneState.WORKING
+        )
 
     def test_idle_pane_is_idle(self, idle_pane):
         assert derive_pane_state(idle_pane, None) == PaneState.IDLE

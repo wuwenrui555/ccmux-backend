@@ -7,6 +7,15 @@ require a major bump.
 
 ## [Unreleased]
 
+## 1.3.1 — 2026-04-20
+
+### Changed
+
+- Apply `ruff format` across `src/` and `tests/`. v1.3.0 landed on
+  `main` with 5 files flagged by the CI `ruff format --check` step;
+  this hotfix reformats them so CI on `main` is green again. No
+  behaviour change.
+
 ## 1.3.0 — 2026-04-20
 
 ### Added
