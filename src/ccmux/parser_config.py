@@ -40,12 +40,22 @@ class UIPattern:
 
     Extraction scans patterns top-down; the first matching top anchor
     starts a region that closes at the first matching bottom anchor.
+
+    When ``walkback`` is True, the extractor expands the region upward
+    after finding the top anchor: it scans back up to 20 lines looking
+    for the nearest full-width ``────`` separator and, if one is found,
+    re-anchors the top to the line immediately below it. Permission
+    prompts render as `────\\n<tool preview>\\n\\nDo you want to
+    proceed?\\n❯ 1. Yes\\n...`; walkback carries the tool preview into
+    the extracted content so the Telegram user can see what they are
+    approving.
     """
 
     name: BlockedUI
     top: tuple[re.Pattern[str], ...]
     bottom: tuple[re.Pattern[str], ...]
     min_gap: int = 2
+    walkback: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +108,22 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
             re.compile(r"^\s*Do you want to delete \S"),
         ),
         bottom=(re.compile(r"^\s*Esc to cancel"),),
+        walkback=True,
+    ),
+    UIPattern(
+        # Mode-toggle confirmation dialogs (Shift+Tab path): "Enable auto
+        # mode?", "Enable plan mode?", etc. The fallback `❯ 1. Yes`
+        # pattern below would match these too but start at the options,
+        # clipping the question header and the description paragraph.
+        # Anchor on the question line so walkback picks up the ────
+        # separator above it and extractions include the full banner.
+        name=BlockedUI.PERMISSION_PROMPT,
+        top=(re.compile(r"^\s*Enable \w+ mode\?"),),
+        bottom=(
+            re.compile(r"^\s*Enter to confirm"),
+            re.compile(r"^\s*Enter to select"),
+        ),
+        walkback=True,
     ),
     UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)
@@ -105,6 +131,7 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
         top=(re.compile(r"^\s*❯\s*1\.\s*Yes"),),
         bottom=(),
         min_gap=2,
+        walkback=True,
     ),
     UIPattern(
         # Bash command approval
@@ -114,6 +141,7 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
             re.compile(r"^\s*This command requires approval"),
         ),
         bottom=(re.compile(r"^\s*Esc to cancel"),),
+        walkback=True,
     ),
     UIPattern(
         name=BlockedUI.RESTORE_CHECKPOINT,

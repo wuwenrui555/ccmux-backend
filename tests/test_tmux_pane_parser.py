@@ -435,27 +435,161 @@ class TestExtractInteractiveContent:
         assert "蓝色" in result.content
 
     def test_permission_prompt_realistic_pane_matches(self):
-        """Real PermissionPrompt pane also has NO input chrome."""
-        pane = (
-            "  Reading 1 file… (ctrl+o to expand)\n"
-            "  ⎿  /etc/hosts\n"
-            "\n"
-            "─" * 60 + "\n"
-            " Read file\n"
-            "\n"
-            "  Read(/etc/hosts)\n"
-            "\n"
-            " Do you want to proceed?\n"
-            " ❯ 1. Yes\n"
-            "   2. Yes, allow reading from etc/ during this session\n"
-            "   3. No\n"
-            "\n"
-            " Esc to cancel · Tab to amend\n"
+        """Real PermissionPrompt pane: the tool preview block sits above
+        the ``Do you want to proceed?`` line. ``walkback`` pulls the
+        preview (tool name + call representation) into the extracted
+        content so the Telegram message shows what is being approved.
+        """
+        sep = "─" * 60
+        pane = "\n".join(
+            [
+                "  Reading 1 file… (ctrl+o to expand)",
+                "  ⎿  /etc/hosts",
+                "",
+                sep,
+                " Read file",
+                "",
+                "  Read(/etc/hosts)",
+                "",
+                " Do you want to proceed?",
+                " ❯ 1. Yes",
+                "   2. Yes, allow reading from etc/ during this session",
+                "   3. No",
+                "",
+                " Esc to cancel · Tab to amend",
+                "",
+            ]
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.ui is BlockedUI.PERMISSION_PROMPT
+        # Tool preview (from walkback) — what the user needs to see.
+        assert "Read file" in result.content
+        assert "Read(/etc/hosts)" in result.content
+        # Question + options + footer.
+        assert "Do you want to proceed?" in result.content
+        assert "1. Yes" in result.content
+        assert "Esc to cancel" in result.content
+        # Pre-preview "Reading 1 file…" line sits above the ──── and
+        # must NOT be included (it is the tool-execution ticker, not
+        # the approval context).
+        assert "Reading 1 file" not in result.content
+
+    def test_permission_prompt_walkback_ignored_when_no_separator(self):
+        """Walkback is a no-op when no ──── is within range; the
+        extraction falls back to the pre-walkback behavior anchored at
+        the top regex match."""
+        pane = "\n".join(
+            [
+                " Do you want to proceed?",
+                " ❯ 1. Yes",
+                "   2. No",
+                " Esc to cancel",
+                "",
+            ]
         )
         result = extract_interactive_content(pane)
         assert result is not None
         assert result.ui is BlockedUI.PERMISSION_PROMPT
         assert "Do you want to proceed?" in result.content
+        # No preview block to include; content starts at the question.
+        content_first_line = result.content.split("\n", 1)[0].strip()
+        assert content_first_line == "Do you want to proceed?"
+
+    def test_bash_approval_walkback_includes_command_preview(self):
+        """Bash approval pane renders the command below a ──── separator
+        and above the ``Bash command`` header. Walkback must carry the
+        command block into extraction so the user sees *what* is being
+        asked for approval, not just the approval prompt."""
+        sep = "─" * 60
+        pane = "\n".join(
+            [
+                "  Running a test command",
+                "",
+                sep,
+                "  Bash command",
+                "",
+                "  rm -rf /tmp/ccmux_demo",
+                "  Remove the demo directory",
+                "",
+                "  Do you want to proceed?",
+                "  ❯ 1. Yes",
+                "    2. No",
+                "",
+                "  Esc to cancel",
+                "",
+            ]
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        # Bash command preview from walkback.
+        assert "Bash command" in result.content
+        assert "rm -rf /tmp/ccmux_demo" in result.content
+        assert "Do you want to proceed?" in result.content
+
+    def test_enable_auto_mode_preserves_header_and_description(self):
+        """Mode-toggle (Shift+Tab) prompts have a question header and
+        a multi-line description above the numbered options. The new
+        pattern anchors on the question; walkback carries back nothing
+        because the question itself is the topmost line after ────. The
+        description sits between the question and the options and is
+        captured by the normal top→bottom extraction.
+        """
+        sep = "─" * 60
+        pane = "\n".join(
+            [
+                sep,
+                "  Enable auto mode?",
+                "",
+                "  Auto mode lets Claude handle permission prompts automatically",
+                "  — Claude checks each tool call for risky actions and prompt",
+                "  injection before executing. Ideal for long-running tasks.",
+                "",
+                "  https://code.claude.com/docs/en/security",
+                "",
+                "  ❯ 1. Yes, and make it my default mode",
+                "    2. Yes, enable auto mode",
+                "    3. No, go back",
+                "",
+                "  Enter to confirm · Esc to cancel",
+                "",
+            ]
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.ui is BlockedUI.PERMISSION_PROMPT
+        assert "Enable auto mode?" in result.content
+        assert "Auto mode lets Claude" in result.content
+        assert "long-running tasks" in result.content
+        assert "1. Yes, and make it my default mode" in result.content
+        assert "Enter to confirm" in result.content
+
+    def test_enable_plan_mode_matches_same_pattern(self):
+        """Mode-toggle pattern is generic across ``Enable <word> mode?``
+        variants. Verify a sibling prompt matches so the pattern is not
+        accidentally auto-mode-specific."""
+        sep = "─" * 60
+        pane = "\n".join(
+            [
+                sep,
+                "  Enable plan mode?",
+                "",
+                "  Plan mode lets Claude plan before editing. Read-only",
+                "  until you approve the plan.",
+                "",
+                "  ❯ 1. Yes, make it my default mode",
+                "    2. Yes, enable plan mode",
+                "    3. No, go back",
+                "",
+                "  Enter to confirm · Esc to cancel",
+                "",
+            ]
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.ui is BlockedUI.PERMISSION_PROMPT
+        assert "Enable plan mode?" in result.content
+        assert "Plan mode lets Claude plan" in result.content
 
 
 class TestInteractiveUIContentShape:
