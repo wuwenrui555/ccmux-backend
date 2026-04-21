@@ -73,6 +73,25 @@ def _shorten_separators(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_WALKBACK_WINDOW = 20
+
+
+def _walkback_to_separator(lines: list[str], top_idx: int) -> int:
+    """Expand `top_idx` upward to the line after the nearest ──── separator.
+
+    Scans up to `_WALKBACK_WINDOW` lines above `top_idx`. Returns the
+    original `top_idx` when no separator is found in range — the
+    extracted region stays unchanged and we fall back to the pre-walkback
+    behavior.
+    """
+    search_end = max(top_idx - _WALKBACK_WINDOW, -1)
+    for i in range(top_idx - 1, search_end, -1):
+        stripped = lines[i].strip()
+        if len(stripped) >= _CHROME_MIN_LEN and all(c == "─" for c in stripped):
+            return i + 1
+    return top_idx
+
+
 def _try_extract(
     lines: list[str], pattern: _pc.UIPattern
 ) -> InteractiveUIContent | None:
@@ -81,6 +100,12 @@ def _try_extract(
     When `pattern.bottom` is empty, the region extends from the top marker
     to the last non-empty line (used for multi-tab AskUserQuestion where the
     bottom delimiter varies by tab).
+
+    When `pattern.walkback` is True, the top anchor is expanded upward
+    to the line after the nearest ``────`` separator so the tool-preview
+    block that sits above permission questions (``Read file`` /
+    ``Read(/etc/passwd)`` / ``Enable auto mode?`` / etc.) is included in
+    the extracted content.
     """
     top_idx: int | None = None
     bottom_idx: int | None = None
@@ -110,7 +135,10 @@ def _try_extract(
     if bottom_idx is None or bottom_idx - top_idx < pattern.min_gap:
         return None
 
-    content = "\n".join(lines[top_idx : bottom_idx + 1]).rstrip()
+    effective_top = (
+        _walkback_to_separator(lines, top_idx) if pattern.walkback else top_idx
+    )
+    content = "\n".join(lines[effective_top : bottom_idx + 1]).rstrip()
     return InteractiveUIContent(content=_shorten_separators(content), ui=pattern.name)
 
 
