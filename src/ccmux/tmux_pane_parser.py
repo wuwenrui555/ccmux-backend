@@ -369,18 +369,78 @@ _STATUS_SCAN_WINDOW = 30
 
 _TODO_ROW_MAX_LEN = 50
 
+_ELBOW = "⎿"
+_CHECKBOX_GLYPHS: frozenset[str] = frozenset("◼◻☐☒✔✓")
 
-def _truncate_todo_row(line: str) -> str:
-    """Shorten a TodoWrite row to at most ``_TODO_ROW_MAX_LEN`` characters.
+# Map each CC glyph to an ASCII checkbox bracket. ASCII brackets render
+# at a stable narrow width on every client (no emoji variant to worry
+# about), and the symbol inside the bracket already conveys the state
+# so rows stay distinguishable without relying on glyph weight.
+_BOX_PENDING = "[ ]"
+_BOX_IN_PROGRESS = "[>]"
+_BOX_DONE = "[x]"
 
-    Long task names would otherwise blow up the Telegram status message.
-    Leading whitespace and the checkbox glyph are kept intact so visual
-    hierarchy (indented sub-items, `◼` vs `◻`) remains legible after
-    truncation.
+_BRACKET_MAP: dict[str, str] = {
+    "◻": _BOX_PENDING,
+    "☐": _BOX_PENDING,
+    "◼": _BOX_IN_PROGRESS,
+    "☒": _BOX_DONE,
+    "✔": _BOX_DONE,
+    "✓": _BOX_DONE,
+}
+
+
+_INDENT = "  "
+_STRIKE_OPEN = "~~"
+_STRIKE_CLOSE = "~~"
+
+
+def _normalize_todo_row(line: str) -> str:
+    """Reshape a raw TodoWrite row from the pane for frontend rendering.
+
+    Transformations:
+      - Drop the ``⎿`` elbow connector the first row uses; CC renders
+        it to anchor the checklist under the spinner, but the frontend
+        already groups the status inside its own message bubble.
+      - Normalize leading whitespace to two spaces so every row
+        (checkboxes + overflow tail) aligns at the same left column.
+      - Replace CC's Unicode checkbox glyphs (``◻``/``◼``/``✔``/``✓``
+        /``☐``/``☒``) with ASCII brackets (``[ ]``/``[>]``/``[x]``).
+        ASCII chars never trigger emoji-style rendering, so columns
+        line up no matter which client renders the message.
+      - Wrap completed rows in GitHub-flavored strikethrough
+        (``~~...~~``); the frontend's markdown pipeline converts to
+        MarkdownV2 single-tilde, which Telegram renders natively.
+      - Truncate rows whose total length would exceed
+        ``_TODO_ROW_MAX_LEN``. Truncation happens on the task text
+        *before* the strikethrough wrap so the closing ``~~`` stays
+        balanced and the MarkdownV2 parser doesn't fall back to plain
+        text on an unterminated directive.
     """
-    if len(line) <= _TODO_ROW_MAX_LEN:
-        return line
-    return line[:_TODO_ROW_MAX_LEN] + "…"
+    stripped = line.lstrip()
+    if stripped.startswith(_ELBOW):
+        stripped = stripped[1:].lstrip()
+
+    if stripped and stripped[0] in _CHECKBOX_GLYPHS:
+        glyph = stripped[0]
+        rest = stripped[1:].lstrip()
+        bracket = _BRACKET_MAP.get(glyph, _BOX_PENDING)
+        body = f"{bracket} {rest}"
+        budget = _TODO_ROW_MAX_LEN - len(_INDENT)
+        if bracket == _BOX_DONE:
+            budget -= len(_STRIKE_OPEN) + len(_STRIKE_CLOSE)
+        if len(body) > budget:
+            body = body[:budget] + "…"
+        if bracket == _BOX_DONE:
+            return f"{_INDENT}{_STRIKE_OPEN}{body}{_STRIKE_CLOSE}"
+        return f"{_INDENT}{body}"
+
+    # Overflow tail ("… +N pending") or any other TODO_PATTERNS match
+    # whose shape doesn't lead with a checkbox glyph.
+    result = f"{_INDENT}{stripped}"
+    if len(result) > _TODO_ROW_MAX_LEN:
+        result = result[:_TODO_ROW_MAX_LEN] + "…"
+    return result
 
 
 def parse_status_line(pane_text: str) -> str | None:
@@ -437,7 +497,7 @@ def parse_status_line(pane_text: str) -> str | None:
         if any(p.search(line) for p in _pc.OVERLAY_PATTERNS):
             continue
         if any(p.search(line) for p in _pc.TODO_PATTERNS):
-            collected.append(_truncate_todo_row(line.rstrip()))
+            collected.append(_normalize_todo_row(line))
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:
             text = stripped[1:].strip()
