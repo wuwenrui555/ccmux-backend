@@ -8,48 +8,41 @@ The Claude–tmux bridge: a backend library that mirrors Claude Code sessions ru
 
 - `Backend` Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols, plus `DefaultBackend` implementation
 - `TmuxSessionRegistry` — multi-session tmux orchestration (`tmux_registry` singleton)
-- `WindowBindings` — `window_id → (session_id, cwd)` map, backed by `~/.ccmux/window_bindings.json`
+- `ClaudeInstanceRegistry` — `instance_id → (session_id, cwd)` map, backed by `~/.ccmux/claude_instances.json`
+- `ClaudeState` — sealed union (`Working | Idle | Blocked | Dead`) pushed per instance via `on_state` callback
 - `MessageMonitor` — byte-offset incremental JSONL reader with tool_use / tool_result pairing
-- `StatusMonitor` — tmux pane capture + status line / interactive UI parsing
-- `LivenessChecker` — verifies Claude Code is still the pane's foreground process; auto-resumes dead sessions
-- `TranscriptParser` — JSONL-to-`ClaudeMessage` parser; emits standard Markdown (including `> ` blockquotes for collapsible regions)
-- `ccmux hook` CLI — Claude Code `SessionStart` hook that populates the window map
+- `StateMonitor` — tmux pane capture + status line / interactive UI parsing, emits `ClaudeState` observations
+- `TranscriptParser` — JSONL-to-`ClaudeMessage` parser; emits standard Markdown (including `>` blockquotes for collapsible regions)
+- `ccmux hook` CLI — Claude Code `SessionStart` hook that populates the instance map
 
 ## Public API
 
 Everything a frontend needs lives at `ccmux.api`:
 
-```python
-from ccmux.api import (
-    # Protocol + lifecycle
-    Backend,                # top-level Protocol
-    TmuxOps,                # backend.tmux sub-protocol
-    ClaudeOps,              # backend.claude sub-protocol
-    DefaultBackend,         # default implementation
-    get_default_backend,
-    set_default_backend,
-    # Event payloads
-    ClaudeMessage,          # pushed to on_message
-    WindowStatus,           # pushed to on_status
-    InteractiveUIContent,
-    UsageInfo,
-    # Query returns
-    WindowBinding,
-    ClaudeSession,
-    TmuxWindow,
-    # Composition inputs
-    WindowBindings,
-    TmuxSessionRegistry,
-    # Parsers
-    TranscriptParser,
-    extract_bash_output,
-    extract_interactive_content,
-    parse_status_line,
-    parse_usage_output,
-    # Composition helpers
-    tmux_registry,
-    sanitize_session_name,
-)
+```text
+ccmux.api exports (after v2.0.0)
+─────────────────────────────────────────
+Protocol + lifecycle
+  Backend, TmuxOps, ClaudeOps
+  DefaultBackend, get_default_backend, set_default_backend
+State family
+  ClaudeState (sealed union of Working | Idle | Blocked | Dead)
+  Working, Idle, Blocked, Dead  — variants
+  BlockedUI  — StrEnum for Blocked.ui
+Message / transcript
+  ClaudeMessage, TranscriptParser
+Instance model
+  ClaudeInstance, ClaudeInstanceRegistry, ClaudeSession
+Composition inputs
+  TmuxSessionRegistry
+Parser surfaces
+  InteractiveUIContent, UsageInfo
+  extract_bash_output, extract_interactive_content
+  parse_status_line, parse_usage_output
+Query types
+  TmuxWindow
+Composition helpers
+  tmux_registry, sanitize_session_name
 ```
 
 Anything imported from submodules (`ccmux.tmux`, `ccmux.backend`, …) is internal and may change without notice. Consumers outside the library should pin to `ccmux.api` only.
@@ -80,22 +73,22 @@ Or auto-install: `ccmux hook --install`.
 ```python
 import asyncio
 from ccmux.api import (
-    DefaultBackend, WindowBindings, tmux_registry, ClaudeMessage, WindowStatus,
+    DefaultBackend, ClaudeInstanceRegistry, tmux_registry,
+    ClaudeMessage, ClaudeState,
 )
 
-async def on_message(msg: ClaudeMessage) -> None:
-    print(f"[{msg.role}] {msg.text}")
+async def on_message(instance_id: str, msg: ClaudeMessage) -> None:
+    print(f"[{instance_id}] [{msg.role}] {msg.text}")
 
-async def on_status(status: WindowStatus) -> None:
-    if status.status_text:
-        print(f"[{status.window_id}] {status.status_text}")
+async def on_state(instance_id: str, state: ClaudeState) -> None:
+    print(f"[{instance_id}] state -> {state}")
 
 async def main() -> None:
     backend = DefaultBackend(
         tmux_registry=tmux_registry,
-        window_bindings=WindowBindings(),
+        claude_instances=ClaudeInstanceRegistry(),
     )
-    await backend.start(on_message=on_message, on_status=on_status)
+    await backend.start(on_state=on_state, on_message=on_message)
     try:
         await asyncio.Event().wait()
     finally:
@@ -110,7 +103,7 @@ asyncio.run(main())
 
 ## State files (under `~/.ccmux/`, overridable with `CCMUX_DIR`)
 
-- `window_bindings.json` — written by the `ccmux hook` CLI on Claude Code `SessionStart`
+- `claude_instances.json` — written by the `ccmux hook` CLI on Claude Code `SessionStart`
 - `claude_monitor.json` — per-session JSONL byte offsets, written by `MessageMonitor`
 - `drift.log` — created on first pane-parser drift warning (Claude Code UI change alert)
 - `hook.log` — appended by the `ccmux hook` CLI on every invocation; captures unhandled tracebacks for postmortems after Claude Code's inline error banner scrolls away
@@ -130,7 +123,7 @@ asyncio.run(main())
 
 ## Development policy
 
-The `ccmux.api` surface is **frozen at v1.0**. Day-to-day feature work
+The `ccmux.api` surface is **frozen at v2.0**. Day-to-day feature work
 — new Telegram commands, new inbound flows, richer rendering, rate
 limiting, retries — should happen in the **frontend** (e.g.
 `ccmux-telegram`) rather than here.
