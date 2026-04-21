@@ -9,7 +9,7 @@ import them directly rather than re-deriving the composition locally.
 Public constants (post-merge):
   - UI_PATTERNS
   - STATUS_SPINNERS
-  - SKIPPABLE_OVERLAY_PATTERNS
+  - SKIPPABLE_PATTERNS
   - SIMPLE_SUMMARY_FIELDS
   - BARE_SUMMARY_TOOLS
 """
@@ -63,11 +63,10 @@ class ParserOverrides:
     """User-supplied overrides for the five Claude-Code-coupled constants."""
 
     ui_patterns: tuple[UIPattern, ...] = ()
-    skippable_overlays: tuple[re.Pattern[str], ...] = ()
+    skippable_patterns: tuple[re.Pattern[str], ...] = ()
     status_spinners: frozenset[str] = frozenset()
     simple_summary_fields: dict[str, str] = field(default_factory=dict)
     bare_summary_tools: frozenset[str] = frozenset()
-    status_skip_glyphs: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -172,25 +171,33 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
 # Spinner characters Claude Code uses in its status line
 _BUILTIN_STATUS_SPINNERS: frozenset[str] = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 
-# Overlay lines that may sit between the real spinner and the chrome.
-_BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Lines that `parse_status_line` treats as free-skip between the spinner
+# and the chrome separator. A match consumes one scan slot (capped by
+# `_STATUS_SCAN_WINDOW`) without bailing.
+#
+# Covers three kinds of content that legitimately stack above the spinner:
+#
+# 1. Overlay modals (e.g. session-rating prompt).
+# 2. TodoWrite checkbox rows — each glyph on its own, plus the compound
+#    `⎿  <checkbox>` elbow form used on the first row to connect the
+#    checklist to the spinner above it.
+# 3. Overflow tail when the TodoWrite list exceeds the render window:
+#    `      … +N pending[, M completed]`.
+#
+# `⎿` alone is intentionally NOT covered — it's Claude's generic tree-elbow
+# and appears on every Bash/tool result line (`  ⎿  Installed 1 package`).
+# Matching `⎿` without a trailing checkbox would let the upward scan cross
+# tool-output blocks and return a stale spinner from scrollback.
+_BUILTIN_SKIPPABLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Session-rating modal (CC 2.1.x+).
     re.compile(r"^\s*●\s*How is Claude doing this session\?"),
     re.compile(r"^\s*1:\s*Bad\b"),
+    # TodoWrite checkbox rows (bare and with first-row elbow connector).
+    re.compile(r"^\s*[◼◻☐☒✔✓]"),
+    re.compile(r"^\s*⎿\s+[◼◻☐☒✔✓]"),
+    # TodoWrite overflow tail: `      … +7 pending` / `… +6 pending, 1 completed`.
+    re.compile(r"^\s*…\s*\+\d+\b"),
 )
-
-# Glyphs that identify TodoWrite / task-checklist lines. When `parse_status_line`
-# scans upward from the chrome separator, lines whose first non-space character
-# is in this set are treated the same as blanks and overlays: skipped without
-# bailing and without consuming the bail-budget. This lets the spinner be found
-# above arbitrarily long task lists (subagent runs, multi-step plans).
-#
-# `⎿` is intentionally NOT in this set — it's Claude's generic tree-elbow
-# and appears on every Bash/tool result line (`  ⎿  Installed 1 package`).
-# Treating it as a free skip would let the upward scan cross tool-output
-# blocks and return a stale spinner from scrollback. The checklist-specific
-# form `⎿  <checkbox>` is handled separately in `parse_status_line`.
-_BUILTIN_STATUS_SKIP_GLYPHS: frozenset[str] = frozenset(["◼", "◻", "☐", "☒", "✔", "✓"])
 
 # One-field tools: tool name -> input dict key to surface as summary.
 _BUILTIN_SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
@@ -314,22 +321,20 @@ def load() -> ParserOverrides:
         return ParserOverrides()
     overrides = ParserOverrides(
         ui_patterns=_parse_ui_patterns(raw.get("ui_patterns")),
-        skippable_overlays=_parse_regex_list(raw.get("skippable_overlays")),
+        skippable_patterns=_parse_regex_list(raw.get("skippable_patterns")),
         status_spinners=_parse_chars(raw.get("status_spinners")),
         simple_summary_fields=_parse_str_dict(raw.get("simple_summary_fields")),
         bare_summary_tools=_parse_str_set(raw.get("bare_summary_tools")),
-        status_skip_glyphs=_parse_chars(raw.get("status_skip_glyphs")),
     )
     logger.info(
         "loaded parser_config.json: "
-        "ui_patterns=%d, skippable_overlays=%d, status_spinners=%d, "
-        "simple_summary_fields=%d, bare_summary_tools=%d, status_skip_glyphs=%d",
+        "ui_patterns=%d, skippable_patterns=%d, status_spinners=%d, "
+        "simple_summary_fields=%d, bare_summary_tools=%d",
         len(overrides.ui_patterns),
-        len(overrides.skippable_overlays),
+        len(overrides.skippable_patterns),
         len(overrides.status_spinners),
         len(overrides.simple_summary_fields),
         len(overrides.bare_summary_tools),
-        len(overrides.status_skip_glyphs),
     )
     return overrides
 
@@ -377,9 +382,9 @@ UI_PATTERNS: list[UIPattern] = list(_OVERRIDES.ui_patterns) + _BUILTIN_UI_PATTER
 # Sets take the union.
 STATUS_SPINNERS: frozenset[str] = _BUILTIN_STATUS_SPINNERS | _OVERRIDES.status_spinners
 
-# User skippable_overlays prepend (same reasoning as ui_patterns).
-SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
-    _OVERRIDES.skippable_overlays + _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS
+# User skippable_patterns prepend (same reasoning as ui_patterns).
+SKIPPABLE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    _OVERRIDES.skippable_patterns + _BUILTIN_SKIPPABLE_PATTERNS
 )
 
 # Dict merge: user wins per key.
@@ -391,11 +396,6 @@ SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
 # Set union.
 BARE_SUMMARY_TOOLS: frozenset[str] = (
     _BUILTIN_BARE_SUMMARY_TOOLS | _OVERRIDES.bare_summary_tools
-)
-
-# Set union — glyphs to skip (free, no bail) between spinner and chrome.
-STATUS_SKIP_GLYPHS: frozenset[str] = (
-    _BUILTIN_STATUS_SKIP_GLYPHS | _OVERRIDES.status_skip_glyphs
 )
 
 # ---------------------------------------------------------------------------
