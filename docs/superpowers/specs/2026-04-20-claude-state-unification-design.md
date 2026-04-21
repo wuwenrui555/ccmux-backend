@@ -52,15 +52,25 @@ union, keyed per `ClaudeInstance`. After the refactor:
 The refactor is internally breaking; external API (`ccmux.api`) ships
 a new type family and drops the old one in the same release.
 
+### Compatibility principle
+
+**No backward compatibility is considered anywhere in this refactor.**
+On upgrade to v2.0.0:
+
+- Old `window_bindings.json` is ignored (does not migrate).
+- Existing frontends pinned to v1.x must update in lockstep.
+- No deprecation shims, no dual-emit callbacks, no alias imports.
+
+This applies to every module, every type, every persistence file, and
+every field name. Rename freely.
+
 ## Non-goals
 
 - No behaviour change to `tmux_pane_parser` functions
   (`parse_status_line`, `extract_interactive_content`, `_has_input_chrome`)
   or their detection accuracy. Pure parser logic is re-used intact.
-- No change to `parser_config.json` or its schema.
-- No change to `hook.py` or the `window_bindings.json` persistence
-  file format. The persistence file stays under its current name to
-  avoid migration, even though the code-level type is renamed.
+- No change to `parser_config.json` or its schema (that is a
+  user-authored override file, not backend-managed state).
 - No change to how fast/slow poll loops are scheduled.
 - Not in scope: push-based transition events, state-transition logs
   to disk, completion-notification dispatch helpers. Frontends compute
@@ -78,6 +88,8 @@ a new type family and drops the old one in the same release.
 | `Backend.is_alive(window_id)` | No direct replacement. `on_state` emits `Dead()` when the process dies; consumers track last state if they care. |
 | `Backend.get_window_binding(window_id)` | `Backend.get_instance(instance_id)`. |
 | `Backend.start(on_message, on_status)` signature | `Backend.start(on_state, on_message)`. Argument order changes (state first for parallelism with the two-axis model). |
+| `$CCMUX_DIR/window_bindings.json` | `$CCMUX_DIR/claude_instances.json`. Old file is ignored on upgrade; users re-bind their Claude sessions (aligns with the existing "bindings are manually managed" policy). |
+| JSON top-level key `session_name` (inside the persistence file) | `instance_id`. |
 
 Internal (not exposed via `ccmux.api`):
 
@@ -205,7 +217,7 @@ ccmux/
 ├── tmux.py                        [-]
 ├── claude_files.py                [-]
 ├── claude_transcript_parser.py    [-]
-├── hook.py                        [-]    (persistence file name untouched)
+├── hook.py                        [M]    persistence file + key rename
 ├── tmux_pane_parser.py            [M]    BlockedUI import; InteractiveUIContent.ui type
 ├── message_monitor.py             [M]    callback signature only
 ├── api.py                         [M]    re-exports new family
@@ -218,7 +230,7 @@ ccmux/
 └── liveness.py                    [-]    → absorbed into state_monitor.py
 ```
 
-Net: 16 files → 16 files (3 deleted, 3 added, 5 modified).
+Net: 16 files → 16 files (3 deleted, 3 added, 6 modified).
 
 ### Field-level renames
 
@@ -227,13 +239,13 @@ ccmux-telegram:
 
 - `WindowBinding` → `ClaudeInstance`
 - `WindowBindings` → `ClaudeInstanceRegistry`
-- `session_name` (field and parameter) → `instance_id`
+- `session_name` (field, parameter, and persistence-file key) → `instance_id`
 - `get_window_binding` → `get_instance`
+- `$CCMUX_DIR/window_bindings.json` → `$CCMUX_DIR/claude_instances.json`
+- `hook.py`'s JSON writes switch to the new filename and key
 
-Not renamed: the on-disk persistence path
-(`$CCMUX_DIR/window_bindings.json`), the JSON schema inside it, and
-the `session_name` key used in `hook.py`'s JSON writes. These stay
-stable to avoid a migration.
+No aliases, no shims, no migration helper. Per the compatibility
+principle above, old state is abandoned on upgrade.
 
 ## Frontend impact (ccmux-telegram)
 
@@ -330,6 +342,5 @@ brainstorming.
 - Completion-notification helpers in ccmux-telegram that fire on
   `Working → Idle` edges. Belongs in the frontend after this refactor
   gives it a clean state type to dispatch on.
-- Retiring the `window_bindings.json` filename in favour of
-  `claude_instances.json`. Requires a one-shot migration; unimportant
-  for now.
+(Previously listed "retire `window_bindings.json`" as a follow-up —
+now folded into this refactor per the compatibility principle.)
