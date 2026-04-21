@@ -186,6 +186,14 @@ def _log_pattern_drift(lines: list[str]) -> None:
 def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
     """Extract content from an interactive UI in terminal output.
 
+    A live blocking UI (permission prompt, AskUserQuestion, ExitPlanMode,
+    Settings panel) always replaces Claude's input chrome — the `────\\n❯\\n
+    ────\\nstatusbar` sandwich at the pane bottom — so we short-circuit
+    when that chrome is still present. Any UI-looking text in that case
+    is scrollback (e.g., a pasted transcript) and must not trigger UI
+    detection. This also stops the status-line poller from spamming the
+    bound topic every tick.
+
     Tries each UI pattern in declaration order; first match wins.
     Returns None if no recognizable interactive UI is found.
 
@@ -198,6 +206,9 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
 
     lines = pane_text.strip().split("\n")
 
+    if _has_input_chrome(lines):
+        return None
+
     for pattern in _pc.UI_PATTERNS:
         result = _try_extract(lines, pattern)
         if result:
@@ -207,6 +218,37 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
         _log_pattern_drift(lines)
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Input chrome detection
+# ---------------------------------------------------------------------------
+
+# How far from the bottom to look for Claude's input chrome sandwich. The
+# real chrome always sits within the last few lines (separator, prompt,
+# separator, 1-4 status lines); 20 lines is a generous upper bound that
+# accommodates extra status widgets without catching scrollback.
+_CHROME_SEARCH_WINDOW = 20
+
+
+def _has_input_chrome(lines: list[str]) -> bool:
+    """True when Claude's input box is rendered at the pane bottom.
+
+    Pattern: a full-width ``────`` separator whose very next line starts
+    with ``❯`` (possibly with user-typed text after). Presence of this
+    sandwich means Claude is in WORKING or IDLE state — no blocking UI.
+    Absence means a UI has taken over the input region.
+    """
+    if not lines:
+        return False
+    search_start = max(0, len(lines) - _CHROME_SEARCH_WINDOW)
+    for i in range(search_start, len(lines) - 1):
+        stripped = lines[i].strip()
+        if len(stripped) < _CHROME_MIN_LEN or not all(c == "─" for c in stripped):
+            continue
+        if lines[i + 1].lstrip().startswith("❯"):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -284,24 +326,37 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 # Status line parsing
 # ---------------------------------------------------------------------------
 
-# Upper bound on how far above the chrome separator the real spinner can
-# sit once overlays are in the way. Generous enough to tolerate 2–3
-# lines of modal plus blank gaps.
-_STATUS_SCAN_WINDOW = 10
+# Absolute safety cap on how far above the chrome separator we'll scan.
+# Every iteration (blank, overlay, checklist, or unknown) consumes one
+# slot. Empirically the real layout is spinner + ≤20 TodoWrite rows +
+# blank + ≤2 overlay lines ≈ 24; 30 leaves headroom for subagent
+# stacking without risking runaway scans on corrupted panes.
+_STATUS_SCAN_WINDOW = 30
 
 
 def parse_status_line(pane_text: str) -> str | None:
-    """Extract the Claude Code status line from terminal output.
+    """Extract the Claude Code RUNNING status line from terminal output.
 
     The status line (spinner + working text) lives above the chrome
     separator (a full line of `─` characters). We locate the separator
-    first, then scan upward — skipping blank lines and recognised
-    overlay modals (e.g. the session-rating prompt) — until we either
-    find a spinner or exhaust the scan window. Bailing only on a
-    non-spinner, non-overlay line keeps `·` bullets in regular output
-    from producing false positives.
+    first, then scan upward, skipping blanks, recognised overlay modals
+    (e.g. the session-rating prompt), and task-checklist glyphs (e.g.
+    TodoWrite's ◼/◻). The scan returns the spinner when found and bails
+    on the first truly unknown line, which keeps stray `·` bullets in
+    regular output from producing false positives.
 
-    Returns the text after the spinner, or None if no status line found.
+    Only **running** status lines are returned. Completion summaries
+    (``✻ Worked for 56s``, ``· Cogitated for 1m 25s``) share the spinner
+    prefix but represent a finished turn and lack the ``…`` ellipsis
+    that Claude Code uses to signal "still in progress". Treating them
+    as running status leaks throwaway `Worked for 56s` bubbles into the
+    Telegram frontend, which then get eaten by the next user message
+    via status→content conversion. Returning None for the completion
+    form keeps the displayed timeline clean; the frontend transitions
+    straight to IDLE once the running status disappears.
+
+    Returns the text after the spinner, or None if no running status
+    line is found.
     """
     if not pane_text:
         return None
@@ -317,10 +372,15 @@ def parse_status_line(pane_text: str) -> str | None:
         stripped = line.strip()
         if not stripped:
             continue
+        if stripped[0] in _pc.STATUS_SKIP_GLYPHS:
+            continue
         if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:
-            return stripped[1:].strip()
+            text = stripped[1:].strip()
+            if "…" not in text:
+                return None
+            return text
         return None
     return None
 

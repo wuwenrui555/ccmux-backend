@@ -35,6 +35,7 @@ def test_load_returns_empty_when_file_missing(
     assert result.status_spinners == frozenset()
     assert result.simple_summary_fields == {}
     assert result.bare_summary_tools == frozenset()
+    assert result.status_skip_glyphs == frozenset()
     assert caplog.records == []  # no warning for absent file
 
 
@@ -61,6 +62,7 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
             "status_spinners": ["★"],
             "simple_summary_fields": {"NewTool": "arg"},
             "bare_summary_tools": ["AnotherTool"],
+            "status_skip_glyphs": ["◆"],
         },
     )
 
@@ -86,6 +88,17 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
 
     # bare_summary_tools
     assert result.bare_summary_tools == frozenset({"AnotherTool"})
+
+    # status_skip_glyphs
+    assert result.status_skip_glyphs == frozenset({"◆"})
+
+
+def test_builtin_status_skip_glyphs_include_todowrite_checkboxes() -> None:
+    """Built-in merged set must cover the TodoWrite glyphs the bot relies on."""
+    from ccmux.parser_config import STATUS_SKIP_GLYPHS
+
+    for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
+        assert glyph in STATUS_SKIP_GLYPHS, f"missing glyph {glyph!r}"
 
 
 def test_invalid_regex_in_ui_pattern_skips_entry(

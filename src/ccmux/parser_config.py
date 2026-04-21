@@ -56,6 +56,7 @@ class ParserOverrides:
     status_spinners: frozenset[str] = frozenset()
     simple_summary_fields: dict[str, str] = field(default_factory=dict)
     bare_summary_tools: frozenset[str] = frozenset()
+    status_skip_glyphs: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +148,15 @@ _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Session-rating modal (CC 2.1.x+).
     re.compile(r"^\s*●\s*How is Claude doing this session\?"),
     re.compile(r"^\s*1:\s*Bad\b"),
+)
+
+# Glyphs that identify TodoWrite / task-checklist lines. When `parse_status_line`
+# scans upward from the chrome separator, lines whose first non-space character
+# is in this set are treated the same as blanks and overlays: skipped without
+# bailing and without consuming the bail-budget. This lets the spinner be found
+# above arbitrarily long task lists (subagent runs, multi-step plans).
+_BUILTIN_STATUS_SKIP_GLYPHS: frozenset[str] = frozenset(
+    ["◼", "◻", "☐", "☒", "✔", "✓"]
 )
 
 # One-field tools: tool name -> input dict key to surface as summary.
@@ -271,16 +281,18 @@ def load() -> ParserOverrides:
         status_spinners=_parse_chars(raw.get("status_spinners")),
         simple_summary_fields=_parse_str_dict(raw.get("simple_summary_fields")),
         bare_summary_tools=_parse_str_set(raw.get("bare_summary_tools")),
+        status_skip_glyphs=_parse_chars(raw.get("status_skip_glyphs")),
     )
     logger.info(
         "loaded parser_config.json: "
         "ui_patterns=%d, skippable_overlays=%d, status_spinners=%d, "
-        "simple_summary_fields=%d, bare_summary_tools=%d",
+        "simple_summary_fields=%d, bare_summary_tools=%d, status_skip_glyphs=%d",
         len(overrides.ui_patterns),
         len(overrides.skippable_overlays),
         len(overrides.status_spinners),
         len(overrides.simple_summary_fields),
         len(overrides.bare_summary_tools),
+        len(overrides.status_skip_glyphs),
     )
     return overrides
 
@@ -342,6 +354,11 @@ SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
 # Set union.
 BARE_SUMMARY_TOOLS: frozenset[str] = (
     _BUILTIN_BARE_SUMMARY_TOOLS | _OVERRIDES.bare_summary_tools
+)
+
+# Set union — glyphs to skip (free, no bail) between spinner and chrome.
+STATUS_SKIP_GLYPHS: frozenset[str] = (
+    _BUILTIN_STATUS_SKIP_GLYPHS | _OVERRIDES.status_skip_glyphs
 )
 
 # ---------------------------------------------------------------------------

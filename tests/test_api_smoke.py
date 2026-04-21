@@ -126,6 +126,32 @@ class TestParsersImportable:
     def test_transcript_parser_parse_line(self) -> None:
         assert TranscriptParser.parse_line("") is None
 
+    def test_tmux_session_empty_name_preserved(self) -> None:
+        """TmuxSession(session_name='') must preserve the empty string.
+
+        Regression: the old `self.session_name = session_name or default`
+        idiom silently replaced empty strings with the configured default,
+        which masked bugs where a caller passed "" by accident and the
+        session then resolved to __ccmux__, writing a window into the
+        wrong session.
+        """
+        from ccmux.tmux import TmuxSession
+
+        tm = TmuxSession(session_name="")
+        assert tm.session_name == ""
+
+    def test_tmux_session_none_falls_back_to_default(self) -> None:
+        """TmuxSession(session_name=None) still uses config.tmux_session_name.
+
+        Preserves the documented backward-compatible default path for
+        callers that explicitly pass None.
+        """
+        from ccmux.tmux import TmuxSession
+        from ccmux.config import config as ccmux_config
+
+        tm = TmuxSession(session_name=None)
+        assert tm.session_name == ccmux_config.tmux_session_name
+
     def test_sanitize_session_name(self) -> None:
         # Just verify the helper executes and returns a string; behavior
         # is covered in tmux-specific tests.

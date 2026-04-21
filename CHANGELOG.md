@@ -5,6 +5,68 @@ All notable changes to `ccmux` are documented here. The project follows
 (`ccmux.api`) is stable across minor and patch releases; breaking changes
 require a major bump.
 
+## [Unreleased]
+
+## 1.3.0 — 2026-04-20
+
+### Added
+
+- `ccmux.api.PaneState` enum (`UNKNOWN` / `WORKING` / `IDLE` / `BLOCKED`).
+  Classifies a captured pane using input-chrome presence and spinner
+  state. Downstream features (completion notifications, waiting-topic
+  dashboards, smart input routing) can dispatch on this instead of
+  reconstructing the same signals from `status_text` /
+  `interactive_ui` independently.
+- `WindowStatus.pane_state` field, populated by `StatusMonitor._observe`.
+  Defaults to `PaneState.UNKNOWN` so existing callers keep working.
+- `parser_config.STATUS_SKIP_GLYPHS` — glyph set of task-checklist
+  bullets (`◼ ◻ ☐ ☒ ✔ ✓`) that are free-skipped between spinner and
+  chrome. Overridable via `parser_config.json`'s new
+  `status_skip_glyphs` array.
+
+### Fixed
+
+- `extract_interactive_content` no longer matches UI patterns in pane
+  scrollback. Live blocking UIs (permission prompts, AskUserQuestion,
+  ExitPlanMode, Settings panels) always replace Claude's input chrome;
+  the presence of the `────\n❯\n────\nstatusbar` sandwich at the pane
+  bottom is now a hard gate that short-circuits detection. Without
+  this, pasted transcripts containing UI-looking text triggered the
+  status poller every tick and the Telegram frontend spammed the
+  bound topic with fresh UI messages every few seconds.
+- `parse_status_line` treats the turn-completion summary (`✻ Worked
+  for 56s`, `· Cogitated for 1m 25s`) as not-running. It shares the
+  spinner prefix but lacks the `…` ellipsis that marks work in
+  progress. Returning the completion line as status leaked throwaway
+  `Worked for 56s` bubbles into Telegram that were then overwritten
+  by the next user message via status→content conversion.
+- `TmuxSession.get_session()` catches `libtmux._internal.query_list
+  .ObjectDoesNotExist`. That class is not a `LibTmuxException`
+  subclass, so the previous `except _TMUX_ERRORS` let it propagate
+  on every "probe for missing session" call — the common path when
+  the picker tries to bind a brand-new session name.
+- `TmuxSession(session_name="")` preserves the empty string instead of
+  silently promoting it to `config.tmux_session_name`. The `or`
+  fallback masked a bug where stale callbacks passed `""` and windows
+  ended up written into the default session (`__ccmux__`) with the
+  topic binding holding an empty session name, producing a permanent
+  "Session '' has no window yet" error.
+- `parse_status_line` now correctly detects the Claude Code spinner
+  when a TodoWrite task checklist (`◼` / `◻` / etc.) sits between the
+  spinner and the chrome separator. Previously the checklist rows
+  were treated as unknown text and bailed the upward scan, leaving
+  Telegram status messages stale during long subagent or multi-step
+  runs.
+- The upward scan budget (`_STATUS_SCAN_WINDOW`) is raised from `10`
+  to `30` — empirically the real layout is spinner + ≤20 TodoWrite
+  rows + blank + ≤2 overlay lines ≈ 24; 30 leaves headroom for
+  subagent stacking. Unknown lines still bail the scan, so the larger
+  window doesn't raise false-positive risk.
+- Claude Code hook handler falls back to PID-based session lookup
+  when stdin is empty. Previously the hook silently failed to
+  register the window, leaving `window_bindings.json` incomplete and
+  the Telegram topic unable to route messages.
+
 ## 1.2.1 — 2026-04-19
 
 ### Changed (internal only — no `ccmux.api` impact)

@@ -7,6 +7,7 @@ from ccmux.tmux_pane_parser import (
     extract_interactive_content,
     parse_status_line,
     parse_usage_output,
+    _has_input_chrome,
     _strip_pane_chrome,
 )
 
@@ -17,17 +18,49 @@ class TestParseStatusLine:
     @pytest.mark.parametrize(
         ("spinner", "rest", "expected"),
         [
-            ("·", "Working on task", "Working on task"),
-            ("✻", "  Reading file  ", "Reading file"),
-            ("✽", "Thinking deeply", "Thinking deeply"),
-            ("✶", "Analyzing code", "Analyzing code"),
-            ("✳", "Processing input", "Processing input"),
-            ("✢", "Building project", "Building project"),
+            ("·", "Working on task…", "Working on task…"),
+            ("✻", "  Reading file…  ", "Reading file…"),
+            ("✽", "Thinking deeply…", "Thinking deeply…"),
+            ("✶", "Analyzing code…", "Analyzing code…"),
+            ("✳", "Processing input…", "Processing input…"),
+            ("✢", "Building project…", "Building project…"),
         ],
     )
     def test_spinner_chars(self, spinner: str, rest: str, expected: str, chrome: str):
+        """Running status: spinner char + text with `…` ellipsis.
+
+        Only running statuses should be surfaced; completion summaries
+        (`Worked for 56s`) still use a spinner char but lack the
+        ellipsis and are handled by the next parametrize block.
+        """
         pane = f"some output\n{spinner}{rest}\n{chrome}"
         assert parse_status_line(pane) == expected
+
+    @pytest.mark.parametrize(
+        ("spinner", "rest"),
+        [
+            ("✻", "Worked for 56s"),
+            ("✻", "Cogitated for 1m 25s"),
+            ("·", "Brewed for 2m 16s"),
+            ("✻", "Churned for 50s"),
+            ("·", "Sautéed for 45s"),
+        ],
+    )
+    def test_completion_lines_return_none(
+        self, spinner: str, rest: str, chrome: str
+    ):
+        """Completion lines (spinner + `Verbed for X` without ellipsis)
+        must NOT be treated as running status. Otherwise the Telegram
+        frontend creates a throwaway `Worked for 56s` bubble that then
+        gets eaten by the user's next message via
+        `_convert_status_to_content`, losing the timeline marker.
+
+        Required-`…` rule is the cheap, stable discriminator: every
+        observed running status contains U+2026, every completion
+        summary uses the `for <duration>` past-tense form without it.
+        """
+        pane = f"some output\n{spinner} {rest}\n{chrome}"
+        assert parse_status_line(pane) is None
 
     @pytest.mark.parametrize(
         "pane",
@@ -41,13 +74,13 @@ class TestParseStatusLine:
 
     def test_no_chrome_returns_none(self):
         """Without chrome separator, status can't be determined."""
-        pane = "output\n✻ Doing work\nno chrome here\n"
+        pane = "output\n✻ Doing work…\nno chrome here\n"
         assert parse_status_line(pane) is None
 
     def test_blank_line_between_status_and_chrome(self, chrome: str):
         """Status line with blank lines before separator."""
-        pane = f"output\n✻ Doing work\n\n{chrome}"
-        assert parse_status_line(pane) == "Doing work"
+        pane = f"output\n✻ Doing work…\n\n{chrome}"
+        assert parse_status_line(pane) == "Doing work…"
 
     def test_idle_no_status(self, chrome: str):
         """Idle pane (no status line above chrome) returns None."""
@@ -60,7 +93,7 @@ class TestParseStatusLine:
         assert parse_status_line(pane) is None
 
     def test_uses_fixture(self, sample_pane_status_line: str):
-        assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
+        assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py…"
 
     def test_rating_modal_does_not_hide_spinner(self, chrome: str):
         """When CC's "How is Claude doing this session?" modal appears
@@ -82,6 +115,65 @@ class TestParseStatusLine:
         UI additions and return stale spinners."""
         pane = f"✽ Old spinner\nSome unknown modal line\n{chrome}"
         assert parse_status_line(pane) is None
+
+    def test_skips_through_task_checklist(self, chrome: str):
+        """TodoWrite checklist between spinner and chrome must not bail."""
+        pane = (
+            "some output\n"
+            "✶ Exploring project context… (2m · ↑ 1.3k tokens)\n"
+            "  ◼ Explore ccmux-telegram project context\n"
+            "  ◻ Ask clarifying questions on both UX issues\n"
+            "  ◻ Propose approaches\n"
+            "\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane) == "Exploring project context… (2m · ↑ 1.3k tokens)"
+        )
+
+    def test_skips_through_long_task_checklist(self, chrome: str):
+        """A checklist larger than the legacy 10-line scan window still
+        finds the spinner — checklist lines are free-skip, not counted."""
+        tasks = "\n".join(f"  ◻ Task {i}" for i in range(20))
+        pane = f"output\n✽ Running…\n{tasks}\n\n{chrome}"
+        assert parse_status_line(pane) == "Running…"
+
+    def test_all_checklist_glyphs_are_skippable(self, chrome: str):
+        """Each glyph in STATUS_SKIP_GLYPHS must be free-skip."""
+        from ccmux.parser_config import STATUS_SKIP_GLYPHS
+
+        for glyph in STATUS_SKIP_GLYPHS:
+            pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
+            assert parse_status_line(pane) == "Running…", f"failed for glyph {glyph!r}"
+
+    def test_checklist_only_no_spinner_returns_none(self, chrome: str):
+        """Pane with task list but no spinner must not false-positive."""
+        pane = "output\n  ◼ Task 1\n  ◻ Task 2\n" + chrome
+        assert parse_status_line(pane) is None
+
+    def test_unknown_text_after_checklist_still_bails(self, chrome: str):
+        """Unknown text above checklist still short-circuits scan."""
+        pane = (
+            "✽ Very old spinner that should NOT be returned\n"
+            "some rogue line that is not known chrome\n"
+            "  ◼ Task 1\n"
+            "  ◻ Task 2\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) is None
+
+    def test_checklist_plus_rating_modal(self, chrome: str):
+        """Checklist and overlay modal can co-exist between spinner and chrome."""
+        pane = (
+            "✶ Working on stuff…\n"
+            "  ◼ Task 1\n"
+            "  ◻ Task 2\n"
+            "\n"
+            "● How is Claude doing this session? (optional)\n"
+            "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == "Working on stuff…"
 
 
 # ── extract_interactive_content ──────────────────────────────────────────
@@ -231,47 +323,203 @@ class TestExtractInteractiveContent:
         pane = "  Do you want to proceed?\n  Esc to cancel\n"
         assert extract_interactive_content(pane) is None
 
-    def test_ask_user_multi_tab_excludes_chrome_and_status(self):
-        """Regression: the no-bottom fallback must cap its search at the
-        chrome separator; otherwise the tmux chrome + status bar below
-        the UI gets swallowed into the extracted content."""
+    def test_input_chrome_present_suppresses_ui_detection(self):
+        """Regression: if Claude's input chrome (`────\n❯\n────\nstatusbar`)
+        is still at the pane bottom, Claude is working or idle, not blocked
+        on a UI. Any UI-looking text above is scrollback (e.g., a user
+        paste of an earlier prompt) and must NOT match. Real UIs always
+        replace the input chrome, verified empirically on
+        PermissionPrompt/AskUserQuestion/ExitPlanMode panes.
+        """
+        chrome = "─" * 60
         pane = (
-            "  Which options apply?\n\n"
-            "  ←  ☐ Option A\n"
-            "     ☐ Option B\n"
-            "     ☐ Option C\n"
-            "  Enter to select\n\n" + "─" * 30 + "\n"
-            "❯\n" + "─" * 30 + "\n"
-            "  [Opus 4.7] 43% | projects\n"
-            "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+            # scrollback with UI-looking text
+            "  Do you want to proceed?\n"
+            "❯ 1. Yes\n"
+            "  2. No\n"
+            "  Esc to cancel\n"
+            "\n"
+            "● Some later assistant output\n"
+            "\n"
+            # live input chrome below
+            + chrome
+            + "\n"
+            + "❯ \n"
+            + chrome
+            + "\n"
+            + "  [Opus 4.7] 43% | projects\n"
+            + "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+        )
+        assert extract_interactive_content(pane) is None
+
+    def test_scrollback_exit_plan_text_with_chrome_returns_none(self):
+        """Specific regression for the ExitPlanMode pattern being matched
+        from a user's pasted transcript when the live pane is idle."""
+        chrome = "─" * 60
+        pane = (
+            "  Would you like to proceed?\n"
+            "  ─────\n"
+            "  Yes     No\n"
+            "  ─────\n"
+            "  ctrl-g to edit in vim\n"
+            + chrome
+            + "\n"
+            + "❯ \n"
+            + chrome
+            + "\n"
+            + "  [Opus 4.7] 10% | projects\n"
+        )
+        assert extract_interactive_content(pane) is None
+
+    def test_ask_user_multi_tab_realistic_pane_matches(self):
+        """Real AskUserQuestion pane has NO input chrome — the UI replaces
+        it entirely. This test uses the realistic pane shape confirmed
+        empirically with a live trigger."""
+        pane = (
+            "─" * 60 + "\n"
+            "←  ☐ 最爱色  ☐ 界面配色  ☐ 避开色  ✔ Submit  →\n"
+            "\n"
+            "你最喜欢哪种颜色？\n"
+            "\n"
+            "❯ 1. 蓝色\n"
+            "     冷静、沉稳\n"
+            "  2. 红色\n"
+            "     热情、醒目\n"
+            "─" * 60 + "\n"
+            "  3. Chat about this\n"
+            "\n"
+            "Enter to select · Tab/Arrow keys to navigate · Esc to cancel\n"
         )
         result = extract_interactive_content(pane)
         assert result is not None
         assert result.name == "AskUserQuestion"
-        assert "Option A" in result.content
-        assert "Enter to select" in result.content
-        assert "bypass permissions" not in result.content
-        assert "Opus" not in result.content
+        assert "蓝色" in result.content
 
-    def test_permission_numbered_excludes_chrome_and_status(self):
-        """Regression: same fallback bug for the PermissionPrompt numbered-menu
-        variant (top=`❯ 1. Yes`, no bottom regex)."""
+    def test_permission_prompt_realistic_pane_matches(self):
+        """Real PermissionPrompt pane also has NO input chrome."""
         pane = (
-            "  Allow this tool call?\n\n"
-            "❯ 1. Yes\n"
-            "  2. Yes, and don't ask again this session\n"
-            "  3. No, tell Claude what to do differently\n\n" + "─" * 30 + "\n"
-            "❯\n" + "─" * 30 + "\n"
-            "  [Opus 4.7] 43% | projects\n"
-            "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+            "  Reading 1 file… (ctrl+o to expand)\n"
+            "  ⎿  /etc/hosts\n"
+            "\n"
+            "─" * 60 + "\n"
+            " Read file\n"
+            "\n"
+            "  Read(/etc/hosts)\n"
+            "\n"
+            " Do you want to proceed?\n"
+            " ❯ 1. Yes\n"
+            "   2. Yes, allow reading from etc/ during this session\n"
+            "   3. No\n"
+            "\n"
+            " Esc to cancel · Tab to amend\n"
         )
         result = extract_interactive_content(pane)
         assert result is not None
         assert result.name == "PermissionPrompt"
-        assert "1. Yes" in result.content
-        assert "3. No" in result.content
-        assert "bypass permissions" not in result.content
-        assert "Opus" not in result.content
+        assert "Do you want to proceed?" in result.content
+
+
+class TestHasInputChrome:
+    """The `────\n❯\n────\nstatusbar` sandwich at the pane bottom marks
+    Claude as "working or idle" — it is absent when a blocking UI has
+    taken over the input region (permission prompt, AskUserQuestion,
+    ExitPlanMode, Settings)."""
+
+    def test_normal_working_pane_has_chrome(self):
+        chrome = "─" * 60
+        lines = (
+            "some output\n"
+            "✶ Sublimating… (32s · ↓ 224 tokens)\n"
+            + chrome
+            + "\n"
+            + "❯ \n"
+            + chrome
+            + "\n"
+            + "  [Opus 4.7] 33% | wenruiwu\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is True
+
+    def test_idle_pane_has_chrome(self):
+        chrome = "─" * 60
+        lines = (
+            "● Worked for 1m 52s\n"
+            + chrome
+            + "\n"
+            + "❯ \n"
+            + chrome
+            + "\n"
+            + "  [Opus 4.7] 10% | wenruiwu\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is True
+
+    def test_input_chrome_with_user_typed_text(self):
+        """User can be typing into the ❯ prompt — still chrome."""
+        chrome = "─" * 60
+        lines = (
+            "● Some output\n"
+            + chrome
+            + "\n"
+            + "❯ half-typed message\n"
+            + chrome
+            + "\n"
+            + "  [Opus 4.7] ...\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is True
+
+    def test_permission_prompt_pane_has_no_chrome(self):
+        lines = (
+            "  Reading 1 file…\n"
+            "─" * 60 + "\n"
+            " Read file\n"
+            "\n"
+            " Do you want to proceed?\n"
+            " ❯ 1. Yes\n"
+            "   2. No\n"
+            " Esc to cancel\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is False
+
+    def test_ask_user_pane_has_no_chrome(self):
+        lines = (
+            "─" * 60 + "\n"
+            "←  ☐ Option A  ☐ Option B  ✔ Submit  →\n"
+            "\n"
+            "Pick one\n"
+            "\n"
+            "❯ 1. Yes\n"
+            "  2. No\n"
+            "─" * 60 + "\n"
+            "Enter to select · Esc to cancel\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is False
+
+    def test_exit_plan_pane_has_no_chrome(self):
+        lines = (
+            "─" * 60 + "\n"
+            " Ready to code?\n"
+            " Here is Claude's plan:\n"
+            " ...plan body...\n"
+            " Would you like to proceed?\n"
+            " ❯ 1. Yes\n"
+            "   2. No\n"
+            " ctrl-g to edit in VS Code\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is False
+
+    def test_empty_pane_has_no_chrome(self):
+        assert _has_input_chrome([]) is False
+
+    def test_short_dash_line_not_counted_as_chrome(self):
+        """Internal UI dividers (< _CHROME_MIN_LEN) must not satisfy the
+        chrome predicate."""
+        lines = (
+            "● Some output\n"
+            + "─" * 8 + "\n"
+            + "❯ 1. option\n"
+            + "─" * 8 + "\n"
+            + "Esc to cancel\n"
+        ).split("\n")
+        assert _has_input_chrome(lines) is False
 
 
 # ── _strip_pane_chrome ───────────────────────────────────────────────────
@@ -394,30 +642,6 @@ class TestPatternDriftWarning:
             extract_interactive_content(pane)
             extract_interactive_content(pane)
             extract_interactive_content(pane)
-        warnings = [r for r in caplog.records if "no UI_PATTERNS matched" in r.message]
-        assert len(warnings) == 1
-
-    def test_dedup_robust_to_chrome_noise(self, caplog):
-        """Regression: identical UI with different claude-hud status content
-        (progress bars that tick each second) must still dedup. Chrome +
-        status lines should be stripped before fingerprinting."""
-        import logging
-
-        base = (
-            "body text\n"
-            "Ready to proceed with this action?\n"
-            "\n"
-            "  1. Yes\n"
-            "  2. No\n"
-            "Esc to cancel\n"
-            "\n" + "─" * 30 + "\n"
-            "❯\n" + "─" * 30 + "\n"
-        )
-        pane_1 = base + "  [Opus 4.7] 13% | projects\n  ⏵⏵ bypass (shift+tab)\n"
-        pane_2 = base + "  [Opus 4.7] 14% | projects\n  ⏵⏵ bypass (shift+tab)\n"
-        with caplog.at_level(logging.WARNING, logger="ccmux.drift"):
-            extract_interactive_content(pane_1)
-            extract_interactive_content(pane_2)
         warnings = [r for r in caplog.records if "no UI_PATTERNS matched" in r.message]
         assert len(warnings) == 1
 
