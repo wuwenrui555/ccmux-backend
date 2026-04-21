@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any  # used in _FakeTmuxWithFallback below
 
 import pytest
 
@@ -58,13 +58,9 @@ class _FakeWindow:
 @dataclass
 class _FakeRegistry:
     instances: list[ClaudeInstance]
-    raw: dict[str, Any]
 
     def all(self):
         return iter(self.instances)
-
-    async def load(self) -> None:
-        pass
 
 
 @pytest.fixture
@@ -85,7 +81,7 @@ class TestClassification:
             window_ids_present={"@1"},
             pane_commands={"@1": "claude"},
         )
-        reg = _FakeRegistry(instances=[inst], raw={"a": {"window_id": "@1"}})
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -108,7 +104,7 @@ class TestClassification:
             window_ids_present={"@1"},
             pane_commands={"@1": "claude"},
         )
-        reg = _FakeRegistry(instances=[inst], raw={})
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -135,7 +131,7 @@ class TestClassification:
             window_ids_present={"@1"},
             pane_commands={"@1": "claude"},
         )
-        reg = _FakeRegistry(instances=[inst], raw={})
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -147,6 +143,30 @@ class TestClassification:
         assert len(seen) == 1
         assert isinstance(seen[0][1], Blocked)
         assert seen[0][1].ui is BlockedUI.PERMISSION_PROMPT
+        assert seen[0][1].content  # non-empty; exact text depends on parser
+
+    @pytest.mark.asyncio
+    async def test_skips_when_chrome_absent_and_no_ui_pattern_matches(self) -> None:
+        """Chrome is gone but no known UIPattern matches the pane text.
+        This is the 'drift' case — state_monitor must skip (no callback)
+        rather than emit a guess."""
+        inst = ClaudeInstance(instance_id="a", window_id="@1", session_id="s", cwd="/")
+        pane = "Just some garbled text that matches no UI pattern\nLine two\n"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reg = _FakeRegistry(instances=[inst])
+        seen: list[tuple[str, ClaudeState]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        mon = StateMonitor(registry=reg, tmux_registry=tmux, on_state=on_state)
+        await mon.fast_tick()
+
+        assert seen == []
 
 
 class TestSkipRules:
@@ -156,7 +176,7 @@ class TestSkipRules:
             instance_id="a", window_id="@gone", session_id="s", cwd="/"
         )
         tmux = _FakeTmux(panes={}, window_ids_present=set(), pane_commands={})
-        reg = _FakeRegistry(instances=[inst], raw={})
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -175,7 +195,7 @@ class TestSkipRules:
             window_ids_present={"@1"},
             pane_commands={"@1": "claude"},
         )
-        reg = _FakeRegistry(instances=[inst], raw={})
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -198,10 +218,7 @@ class TestSlowTickDead:
             window_ids_present={"@1"},
             pane_commands={"@1": "zsh"},
         )
-        reg = _FakeRegistry(
-            instances=[inst],
-            raw={"a": {"window_id": "@1", "session_id": "s", "cwd": "/home/u"}},
-        )
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -224,10 +241,7 @@ class TestSlowTickDead:
             window_ids_present={"@1"},
             pane_commands={"@1": "claude"},
         )
-        reg = _FakeRegistry(
-            instances=[inst],
-            raw={"a": {"window_id": "@1", "session_id": "s", "cwd": "/home/u"}},
-        )
+        reg = _FakeRegistry(instances=[inst])
         seen: list[tuple[str, ClaudeState]] = []
 
         async def on_state(instance_id: str, state: ClaudeState) -> None:
@@ -237,3 +251,50 @@ class TestSlowTickDead:
         await mon.slow_tick()
 
         assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_dead_via_get_or_create_fallback(self) -> None:
+        """When tmux_registry.get_by_window_id returns None (cache miss),
+        the probe falls back to get_or_create(instance_id) and still emits
+        Dead when the pane's foreground process is not claude."""
+        inst = ClaudeInstance(
+            instance_id="__ccmux__",
+            window_id="@1",
+            session_id="s",
+            cwd="/home/u",
+        )
+
+        @dataclass
+        class _FakeTmuxWithFallback:
+            """get_by_window_id returns None; get_or_create returns a working
+            session whose find_window_by_id reports pane_current_command='zsh'."""
+
+            session: Any
+
+            def get_by_window_id(self, wid: str):
+                return None  # simulate cache miss
+
+            def get_or_create(self, session_name: str):
+                return self.session
+
+        @dataclass
+        class _FakeSession:
+            async def find_window_by_id(self, wid: str):
+                return _FakeWindow(window_id=wid, pane_current_command="zsh")
+
+            async def capture_pane(self, wid: str) -> str:
+                return ""
+
+        tmux = _FakeTmuxWithFallback(session=_FakeSession())
+        reg = _FakeRegistry(instances=[inst])
+        seen: list[tuple[str, ClaudeState]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        mon = StateMonitor(registry=reg, tmux_registry=tmux, on_state=on_state)
+        await mon.slow_tick()
+
+        deads = [(iid, s) for iid, s in seen if isinstance(s, Dead)]
+        assert len(deads) == 1
+        assert deads[0][0] == "__ccmux__"

@@ -252,6 +252,10 @@ def _has_input_chrome(lines: list[str]) -> bool:
     return False
 
 
+# Public alias — callers outside this module should use this.
+has_input_chrome = _has_input_chrome
+
+
 # ---------------------------------------------------------------------------
 # Chrome detection
 # ---------------------------------------------------------------------------

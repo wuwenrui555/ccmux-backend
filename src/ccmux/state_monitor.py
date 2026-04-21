@@ -25,8 +25,8 @@ from typing import Awaitable, Callable, TYPE_CHECKING
 
 from .claude_state import Blocked, ClaudeState, Dead, Idle, Working
 from .tmux_pane_parser import (
-    _has_input_chrome,
     extract_interactive_content,
+    has_input_chrome,
     parse_status_line,
 )
 
@@ -103,7 +103,7 @@ class StateMonitor:
             return None
 
         lines = pane_text.strip().split("\n")
-        if not _has_input_chrome(lines):
+        if not has_input_chrome(lines):
             ui = extract_interactive_content(pane_text)
             if ui is None:
                 return None
@@ -120,7 +120,11 @@ class StateMonitor:
             return False
         tm = self._tmux_registry.get_by_window_id(inst.window_id)
         if tm is None:
-            return False
+            # Cache miss (restart, session rename): fall back to the stable
+            # instance_id. Old liveness.py had this same fallback; without it a
+            # session whose window_id is not yet in the tmux cache is never
+            # observed as Dead even when its process exits.
+            tm = self._tmux_registry.get_or_create(inst.instance_id)
         w = await tm.find_window_by_id(inst.window_id)
         if w is None:
             return False
