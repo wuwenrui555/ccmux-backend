@@ -119,13 +119,7 @@ class TestClassification:
     @pytest.mark.asyncio
     async def test_blocked_from_missing_chrome(self) -> None:
         inst = ClaudeInstance(instance_id="a", window_id="@1", session_id="s", cwd="/")
-        pane = (
-            "Edit /tmp/foo\n"
-            "Do you want to proceed?\n"
-            "1. Yes\n"
-            "2. No\n"
-            "Esc to cancel\n"
-        )
+        pane = "Edit /tmp/foo\nDo you want to proceed?\n1. Yes\n2. No\nEsc to cancel\n"
         tmux = _FakeTmux(
             panes={"@1": pane},
             window_ids_present={"@1"},
