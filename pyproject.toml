@@ -1,6 +1,6 @@
 [project]
 name = "ccmux"
-version = "2.2.2"
+version = "2.3.0"
 description = "Claude-tmux bridge: mirrors Claude Code sessions in tmux to a stable Python API"
 readme = "README.md"
 requires-python = ">=3.12"

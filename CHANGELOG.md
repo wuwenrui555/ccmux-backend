@@ -9,6 +9,48 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.3.0 — 2026-04-21
+
+### Added
+
+- `parse_status_line` now appends TodoWrite rows to the returned
+  status text so frontends can render what Claude is working on
+  alongside the spinner. The returned string is the spinner text on
+  the first line followed by every checkbox row, the first-row
+  `⎿  <checkbox>` elbow connector, and the `… +N pending[, M
+  completed]` overflow tail — each on its own line, in top-to-bottom
+  visual order, preserving original indentation. Rows longer than 50
+  characters are truncated with an ellipsis so a verbose multi-task
+  plan stays within Telegram's status message budget. Panes without
+  TodoWrite content keep returning a single-line spinner text, same
+  as before.
+
+### Changed
+
+- `parser_config` splits the previously merged `SKIPPABLE_PATTERNS`
+  into two named buckets with distinct disposition during the
+  spinner scan:
+  - `OVERLAY_PATTERNS` — skipped but not collected (session-rating
+    modal and similar overlays that should not surface in the status
+    text). User-supplied `skippable_patterns` JSON overrides land
+    here by default.
+  - `TODO_PATTERNS` — skipped AND collected (TodoWrite checkbox
+    rows, the elbow connector, and the overflow tail).
+  `SKIPPABLE_PATTERNS` remains exported as the union for callers
+  that only need a single "is this skippable?" check.
+
+- `$CCMUX_DIR/parser_config.json` schema is unchanged: user
+  `skippable_patterns` entries are still accepted and now merged
+  into `OVERLAY_PATTERNS`.
+
+### Tests
+
+- Seven new tests cover the appending behaviour, 50-character
+  truncation, rating-modal overlay disposition, and
+  backward-compatible single-line return when no TodoWrite is
+  present. Pre-existing TodoWrite tests updated to assert on the
+  new multi-line shape.
+
 ## 2.2.2 — 2026-04-21
 
 Tests and tooling only. No code or API changes.
