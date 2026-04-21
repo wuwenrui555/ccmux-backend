@@ -46,7 +46,7 @@ class WindowBindings:
     """
 
     def __init__(self, map_file: Path | None = None) -> None:
-        self._map_file = map_file if map_file is not None else config.bindings_file
+        self._map_file = map_file if map_file is not None else config.instances_file
         self._data: dict[str, dict[str, str]] = {}
         self._read()
 

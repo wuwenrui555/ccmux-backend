@@ -56,10 +56,10 @@ def has_session_map_entry(session_name: str) -> bool:
     """Check if `window_bindings.json` has a populated entry for this session."""
     from .config import config
 
-    if not config.bindings_file.exists():
+    if not config.instances_file.exists():
         return False
     try:
-        session_map = json.loads(config.bindings_file.read_text())
+        session_map = json.loads(config.instances_file.read_text())
         info = session_map.get(session_name, {})
         return bool(info.get("session_id"))
     except (json.JSONDecodeError, OSError):

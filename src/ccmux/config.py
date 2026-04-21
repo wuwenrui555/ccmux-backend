@@ -53,7 +53,7 @@ class Config:
         # Claude command to run in new windows
         self.claude_command = os.getenv("CLAUDE_COMMAND", "claude")
 
-        self.bindings_file = self.config_dir / "window_bindings.json"
+        self.instances_file = self.config_dir / "claude_instances.json"
         self.monitor_state_file = self.config_dir / "claude_monitor.json"
 
         custom_projects_path = os.getenv("CCMUX_CLAUDE_PROJECTS_PATH")
