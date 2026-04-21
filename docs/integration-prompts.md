@@ -57,25 +57,32 @@ clear before sending the main prompt.
 **Prompt** (send as a single message):
 
 ```text
-I'm load-testing a tmux pane parser, not asking you to do real work.
-The package `foo` does not exist — do not look for it, create it, or
-touch the filesystem in any way. Only TodoWrite and `Bash(sleep N)`
-are allowed.
+Create exactly 12 TodoWrite tasks for planning a refactor of a Python
+package `foo`. Cover: types layer, data layer, parser, state machine,
+monitor, backend, public API, legacy-module cleanup, version bump,
+CHANGELOG, README, tests. Do not merge, shorten, or drop any.
 
-Steps:
+Then work through the plan one task at a time. For each: mark it
+`in_progress`, analyze what the refactor of that layer would involve
+in at least three paragraphs of detailed reasoning (interleaved
+thinking is fine), mark it `completed`, pick the next. Use no tools
+other than TodoWrite.
 
-1. Use TodoWrite to create exactly 12 distinct subtasks for refactoring
-   a hypothetical Python package `foo`. Cover: types layer, data layer,
-   parser, state machine, monitor, backend, public API, legacy-module
-   cleanup, version bump, CHANGELOG, README, tests. Don't merge,
-   shorten, or drop any.
-
-2. Work through them: mark one task in_progress, run `sleep 60`, mark
-   it completed, move to the next one. Repeat until all 12 are done.
-
-Begin immediately — treat this whole message as a single load-test
-instruction.
+Do not look for the `foo` package on disk — it is a hypothetical
+planning exercise, not a real codebase.
 ```
+
+**Prompt design notes:**
+
+- No `Bash(sleep N)` loop: Claude Code's harness blocks standalone
+  long sleeps (`Blocked: standalone sleep 60. Use Monitor ...`), so
+  the keep-alive has to come from CC's own thinking time. Three
+  paragraphs of analysis per task sustains the `✻ Thinking…` spinner
+  long enough to capture multiple times across 12 iterations.
+- No meta-language (`load-test`, `I'm testing`, `treat this as an
+  instruction`): CC sessions sharing `MEMORY.md` with a meta-testing
+  session can pick up that context and ask for confirmation instead
+  of executing. The prompt reads as a normal planning request.
 
 **Verify** (Claude runs; user reads summary):
 
@@ -85,8 +92,10 @@ TEST_PANE="${TEST_PANE:-test}"
 BOT_PANE="${BOT_PANE:-__ccmux__:1.1}"
 BACKEND_DIR="${BACKEND_DIR:-$HOME/projects/ccmux-backend}"
 
-# Layer 1 — raw pane shows spinner + overflow tail
-pane="$(tmux capture-pane -p -t "$TEST_PANE" -S -200)"
+# Layer 1 — current visible pane shows spinner + overflow tail.
+# Do NOT include scrollback: `-S -N` would match historical spinners
+# from earlier turns and false-positive when CC is actually idle.
+pane="$(tmux capture-pane -p -t "$TEST_PANE")"
 echo "$pane" | grep -qE '(✶|✽|✻|✢|✳|·).+…'  || { echo "Layer 1 FAIL: no spinner"; exit 1; }
 echo "$pane" | grep -qE '… \+[0-9]+ (pending|completed)' || { echo "Layer 1 FAIL: no overflow tail"; exit 1; }
 echo "Layer 1 PASS"
