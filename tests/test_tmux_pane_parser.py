@@ -129,6 +129,46 @@ class TestParseStatusLine:
             parse_status_line(pane) == "Exploring project context… (2m · ↑ 1.3k tokens)"
         )
 
+    def test_skips_through_elbow_connector_on_first_task(self, chrome: str):
+        """First checklist row uses the `⎿` elbow to connect to the spinner
+        line above (`  ⎿  ◼ First task`). The upward scan must treat this
+        compound elbow-plus-checkbox form as skippable — otherwise it bails
+        on the elbow and the spinner is never reached."""
+        pane = (
+            "some output\n"
+            "· Auditing WindowStatus / PaneState usage… (1m 6s · thinking)\n"
+            "  ⎿  ◼ Audit current WindowStatus / PaneState usage\n"
+            "     ◻ Clarify refactor scope with user\n"
+            "     ◻ Propose refactor approaches\n"
+            "     ◻ Write design doc and gate on user review\n"
+            "\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane)
+            == "Auditing WindowStatus / PaneState usage… (1m 6s · thinking)"
+        )
+
+    def test_lone_elbow_tool_output_still_bails(self, chrome: str):
+        """A plain `⎿  text` line is generic tool output (Bash result,
+        Read summary, etc.), not a checklist elbow. The scan must bail
+        on it — otherwise it walks through scrollback and can return a
+        stale spinner from a prior turn."""
+        pane = (
+            "✽ Stale spinner from earlier turn…\n"
+            "● Bash(uv run pytest -q)\n"
+            "  ⎿  262 passed, 1 warning in 1.28s\n"
+            "  ⎿  Installed 1 package in 10ms\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) is None
+
+    def test_elbow_with_non_checkbox_content_still_bails(self, chrome: str):
+        """`⎿` followed by text (not a checkbox glyph) is tool output,
+        not a checklist elbow — scan must bail."""
+        pane = f"✽ Very old spinner…\n  ⎿  Read 3 lines\n{chrome}"
+        assert parse_status_line(pane) is None
+
     def test_skips_through_long_task_checklist(self, chrome: str):
         """A checklist larger than the legacy 10-line scan window still
         finds the spinner — checklist lines are free-skip, not counted."""

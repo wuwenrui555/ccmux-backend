@@ -155,6 +155,12 @@ _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
 # is in this set are treated the same as blanks and overlays: skipped without
 # bailing and without consuming the bail-budget. This lets the spinner be found
 # above arbitrarily long task lists (subagent runs, multi-step plans).
+#
+# `⎿` is intentionally NOT in this set — it's Claude's generic tree-elbow
+# and appears on every Bash/tool result line (`  ⎿  Installed 1 package`).
+# Treating it as a free skip would let the upward scan cross tool-output
+# blocks and return a stale spinner from scrollback. The checklist-specific
+# form `⎿  <checkbox>` is handled separately in `parse_status_line`.
 _BUILTIN_STATUS_SKIP_GLYPHS: frozenset[str] = frozenset(["◼", "◻", "☐", "☒", "✔", "✓"])
 
 # One-field tools: tool name -> input dict key to surface as summary.

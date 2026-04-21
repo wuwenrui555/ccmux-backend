@@ -374,6 +374,15 @@ def parse_status_line(pane_text: str) -> str | None:
             continue
         if stripped[0] in _pc.STATUS_SKIP_GLYPHS:
             continue
+        # Checklist elbow: first TodoWrite row is rendered as
+        # `  ⎿  ◼ First task`, connecting the sub-list to the spinner
+        # above. Skip only this compound form — a lone `⎿  text` is
+        # generic tool output (`⎿  Installed 1 package`) and must still
+        # bail, otherwise the scan walks through scrollback.
+        if stripped[0] == "⎿":
+            after_elbow = stripped[1:].lstrip()
+            if after_elbow and after_elbow[0] in _pc.STATUS_SKIP_GLYPHS:
+                continue
         if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:

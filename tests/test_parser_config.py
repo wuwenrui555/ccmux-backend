@@ -99,6 +99,9 @@ def test_builtin_status_skip_glyphs_include_todowrite_checkboxes() -> None:
 
     for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
         assert glyph in STATUS_SKIP_GLYPHS, f"missing glyph {glyph!r}"
+    # `⎿` is intentionally excluded — it's a generic tool-result elbow;
+    # the checklist-elbow form is handled in parse_status_line itself.
+    assert "⎿" not in STATUS_SKIP_GLYPHS
 
 
 def test_invalid_regex_in_ui_pattern_skips_entry(
