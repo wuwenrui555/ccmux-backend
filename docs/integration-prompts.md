@@ -11,18 +11,19 @@ Unit tests in [`tests/test_tmux_pane_parser.py`](../tests/test_tmux_pane_parser.
 guard against regressions on *known* pane shapes, but they have a
 blind spot: if Claude Code reworks its rendering and the real output
 no longer matches the hard-coded fixture, the unit test keeps
-passing — against a snapshot of yesterday's CC. These prompts let a
-human re-run the full stack at any time to check the assumption is
+passing — against a snapshot of yesterday's CC. These prompts let
+Claude re-run the full stack at any time to check the assumption is
 still true.
 
-Runbook per entry:
+Runbook per entry (Claude executes; user only reads the summary):
 
-1. Start a fresh CC session in a known tmux pane.
-2. Send the prompts in order; wait for CC to respond between each.
-3. Once CC renders the target state, run every command under
-   **Verify**.
-4. If a check fails on current CC but unit tests still pass, the
-   unit fixture has drifted — refresh it from a new capture.
+1. `/clear` the designated test CC session so prior state doesn't
+   contaminate the capture.
+2. Send the prompt to the test pane and press Enter.
+3. Wait for CC to render the target state.
+4. Run the single **Verify** shell block; it fails fast on the first
+   layer that doesn't match.
+5. Report per-layer `PASS` / `FAIL` plus actual output on failure.
 
 ## Conventions
 
@@ -30,8 +31,8 @@ Runbook per entry:
   prompts should work on any machine.
 - Each entry is self-contained; don't assume state from a previous
   prompt.
-- "Keep CC in state" instructions go inside the prompt sequence, not
-  as external keep-alive — the sequence is the reproducible unit.
+- Prompts are English, single-message, self-contained. Keep-alive
+  instructions belong inside the prompt, not as external tooling.
 - Cite the unit fixture derived from the capture so the unit test
   and the integration prompt stay linked.
 
@@ -50,58 +51,61 @@ tail. Without the tail-skip rule, `parse_status_line` bails on the
 `…` row and returns `None`, so the frontend sees IDLE while CC is
 actively working.
 
-**Prompt sequence:**
+**Prep:** send `/clear` to the test pane and wait for the prompt to
+clear before sending the main prompt.
 
-1. Queue up 12 tasks, stop before executing:
+**Prompt** (send as a single message):
 
-   ```text
-   我要你重构一个叫 foo 的 Python 包，具体步骤很多，每一步都必须独立做完
-   再进下一步。请先用 TodoWrite 列出至少 12 个明确的子任务（不要合并不要
-   省略），覆盖：类型层、数据层、解析层、状态机、监听、后端、公开 API、
-   删除遗留模块、版本号、CHANGELOG、README、测试。列完之后不要急着执行，
-   先卡住等我确认。
-   ```
+```text
+I'm load-testing a tmux pane parser, not asking you to do real work.
+The package `foo` does not exist — do not look for it, create it, or
+touch the filesystem in any way. Only TodoWrite and `Bash(sleep N)`
+are allowed.
 
-2. Hold CC in Working without touching the filesystem:
+Steps:
 
-   ```text
-   不用真改 foo 包（它不存在），但请把任务列表保持为运行状态：每推进一条
-   任务前 sleep 60 秒再继续，只做 TodoWrite 状态切换，不碰文件系统。
-   ```
+1. Use TodoWrite to create exactly 12 distinct subtasks for refactoring
+   a hypothetical Python package `foo`. Cover: types layer, data layer,
+   parser, state machine, monitor, backend, public API, legacy-module
+   cleanup, version bump, CHANGELOG, README, tests. Don't merge,
+   shorten, or drop any.
 
-**Verify — check all three layers:**
+2. Work through them: mark one task in_progress, run `sleep 60`, mark
+   it completed, move to the next one. Repeat until all 12 are done.
 
-1. **Pane capture** — spinner line and the overflow tail are both
-   present in the live pane:
+Begin immediately — treat this whole message as a single load-test
+instruction.
+```
 
-   ```bash
-   tmux capture-pane -p -t <your-test-pane> \
-     | grep -E '(✶|✽|✻|✢|✳|·).+…|… \+\d+ pending'
-   ```
+**Verify** (Claude runs; user reads summary):
 
-   Two matching lines = CC is in the target state.
+```bash
+set -e
+TEST_PANE="${TEST_PANE:-test}"
+BOT_PANE="${BOT_PANE:-__ccmux__:1.1}"
+BACKEND_DIR="${BACKEND_DIR:-$HOME/projects/ccmux-backend}"
 
-2. **Backend parser** — confirms the v2.2.1 fix still applies (old
-   versions returned `None` here):
+# Layer 1 — raw pane shows spinner + overflow tail
+pane="$(tmux capture-pane -p -t "$TEST_PANE" -S -200)"
+echo "$pane" | grep -qE '(✶|✽|✻|✢|✳|·).+…'  || { echo "Layer 1 FAIL: no spinner"; exit 1; }
+echo "$pane" | grep -qE '… \+[0-9]+ (pending|completed)' || { echo "Layer 1 FAIL: no overflow tail"; exit 1; }
+echo "Layer 1 PASS"
 
-   ```bash
-   tmux capture-pane -p -t <your-test-pane> \
-     | uv run --project ~/projects/ccmux-backend python -c \
-       'import sys; from ccmux.tmux_pane_parser import parse_status_line; print(parse_status_line(sys.stdin.read()))'
-   ```
+# Layer 2 — backend parser returns the spinner text
+parsed="$(echo "$pane" | uv run --project "$BACKEND_DIR" python -c \
+    'import sys; from ccmux.tmux_pane_parser import parse_status_line; r = parse_status_line(sys.stdin.read()); print(r if r else "__NONE__")')"
+case "$parsed" in
+    __NONE__|"") echo "Layer 2 FAIL: parse_status_line returned None"; exit 1 ;;
+    *…*)         echo "Layer 2 PASS: $parsed" ;;
+    *)           echo "Layer 2 FAIL: missing ellipsis: $parsed"; exit 1 ;;
+esac
 
-   Expect a non-`None` string ending in `…` — e.g. `Nesting… (12s · thinking)`.
-
-3. **Frontend log** — the status reached `ccmux-telegram` and was
-   enqueued for delivery:
-
-   ```bash
-   tmux capture-pane -p -t __ccmux__:1.1 -S -200 \
-     | grep "Enqueue status_update.*text='"
-   ```
-
-   Expect a recent entry (timestamp newer than when you sent prompt 2)
-   with `text='<spinner text>'` matching what the parser returned.
+# Layer 3 — ccmux-telegram enqueued the status update
+tmux capture-pane -p -t "$BOT_PANE" -S -500 \
+  | grep "Enqueue status_update" | tail -3 \
+  | grep -q "text='" || { echo "Layer 3 FAIL: no recent Enqueue status_update"; exit 1; }
+echo "Layer 3 PASS"
+```
 
 **Unit fixture derived from this prompt:**
 `tests/test_tmux_pane_parser.py::TestParseStatusLine::test_realistic_long_todowrite_pane`
