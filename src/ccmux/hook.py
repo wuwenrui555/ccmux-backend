@@ -42,6 +42,7 @@ _SESSION_FILE_RE = re.compile(
 # clear log line instead of a cryptic tmux error.
 _PANE_RE = re.compile(r"^%\d+$")
 
+
 # Claude Code derives its per-project transcript directory from the launch
 # cwd by replacing every `/`, `_`, and `.` with `-`. Verified against the
 # full listing of `~/.claude/projects/` on a live system.
@@ -121,9 +122,7 @@ def _resolve_session_via_pid(pane_id: str) -> tuple[str, str] | None:
     if not launch_cwd or not os.path.isabs(launch_cwd):
         return None
 
-    project_dir = (
-        Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
-    )
+    project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
     try:
         candidates = [
             p
@@ -386,9 +385,7 @@ def _hook_main_impl() -> None:
     if not session_id or not _UUID_RE.match(session_id) or not cwd:
         resolved = _resolve_session_via_pid(pane_id)
         if resolved is None:
-            logger.debug(
-                "Could not resolve session via PID fallback; skipping"
-            )
+            logger.debug("Could not resolve session via PID fallback; skipping")
             return
         session_id, cwd = resolved
         logger.info(
