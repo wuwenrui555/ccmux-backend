@@ -178,10 +178,8 @@ class TestParseStatusLine:
         assert parse_status_line(pane) == "Running…"
 
     def test_all_checklist_glyphs_are_skippable(self, chrome: str):
-        """Each glyph in STATUS_SKIP_GLYPHS must be free-skip."""
-        from ccmux.parser_config import STATUS_SKIP_GLYPHS
-
-        for glyph in STATUS_SKIP_GLYPHS:
+        """Each built-in TodoWrite checkbox glyph must be free-skip."""
+        for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
             pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
             assert parse_status_line(pane) == "Running…", f"failed for glyph {glyph!r}"
 
@@ -213,6 +211,40 @@ class TestParseStatusLine:
             f"{chrome}"
         )
         assert parse_status_line(pane) == "Working on stuff…"
+
+    def test_skips_todowrite_pending_tail(self, chrome: str):
+        """When a TodoWrite list exceeds the render window, CC appends a
+        `      … +N pending[, M completed]` tail between the last visible
+        checkbox and the chrome. That tail is not a checkbox, not a
+        spinner, and not a rating-modal line — without explicit handling
+        `parse_status_line` bails on it and the spinner never surfaces."""
+        pane = (
+            "✽ Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)\n"
+            "  ⎿  ◼ Task A1: claude_state.py + types\n"
+            "     ◻ Execute plan via superpowers:subagent-driven-development\n"
+            "     ◻ Task A2: BlockedUI into tmux_pane_parser\n"
+            "      … +7 pending\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane)
+            == "Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)"
+        )
+
+    def test_skips_todowrite_pending_and_completed_tail(self, chrome: str):
+        """CC's tail variant also reports already-finished tasks, e.g.
+        `      … +6 pending, 1 completed`. Same skip rule applies."""
+        pane = (
+            "✶ Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)\n"
+            "  ⎿  ◼ Task A2: BlockedUI into tmux_pane_parser\n"
+            "     ◻ Task B1: Frontend StateCache + is_alive rewire\n"
+            "      … +6 pending, 1 completed\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane)
+            == "Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)"
+        )
 
 
 # ── extract_interactive_content ──────────────────────────────────────────

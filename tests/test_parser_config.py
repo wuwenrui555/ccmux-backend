@@ -32,11 +32,10 @@ def test_load_returns_empty_when_file_missing(
     caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
     result = pc.load()
     assert result.ui_patterns == ()
-    assert result.skippable_overlays == ()
+    assert result.skippable_patterns == ()
     assert result.status_spinners == frozenset()
     assert result.simple_summary_fields == {}
     assert result.bare_summary_tools == frozenset()
-    assert result.status_skip_glyphs == frozenset()
     assert caplog.records == []  # no warning for absent file
 
 
@@ -59,11 +58,10 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
                     "min_gap": 3,
                 }
             ],
-            "skippable_overlays": ["^\\s*skipme"],
+            "skippable_patterns": ["^\\s*skipme", "^\\s*◆"],
             "status_spinners": ["★"],
             "simple_summary_fields": {"NewTool": "arg"},
             "bare_summary_tools": ["AnotherTool"],
-            "status_skip_glyphs": ["◆"],
         },
     )
 
@@ -77,9 +75,11 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
     assert p.bottom[0].pattern == "^Custom bottom"
     assert p.min_gap == 3
 
-    # skippable_overlays
-    assert len(result.skippable_overlays) == 1
-    assert result.skippable_overlays[0].pattern == "^\\s*skipme"
+    # skippable_patterns
+    assert [p.pattern for p in result.skippable_patterns] == [
+        "^\\s*skipme",
+        "^\\s*◆",
+    ]
 
     # status_spinners
     assert result.status_spinners == frozenset({"★"})
@@ -90,19 +90,22 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
     # bare_summary_tools
     assert result.bare_summary_tools == frozenset({"AnotherTool"})
 
-    # status_skip_glyphs
-    assert result.status_skip_glyphs == frozenset({"◆"})
 
+def test_builtin_skippable_patterns_cover_todowrite_rows() -> None:
+    """Built-in SKIPPABLE_PATTERNS must match each TodoWrite checkbox glyph
+    on its own line and also the first-row elbow connector (`⎿  <checkbox>`).
+    A lone `⎿  text` tool-result line must NOT match — otherwise the upward
+    status scan would cross tool output and return a stale spinner."""
+    from ccmux.parser_config import SKIPPABLE_PATTERNS
 
-def test_builtin_status_skip_glyphs_include_todowrite_checkboxes() -> None:
-    """Built-in merged set must cover the TodoWrite glyphs the bot relies on."""
-    from ccmux.parser_config import STATUS_SKIP_GLYPHS
+    def matches(line: str) -> bool:
+        return any(p.search(line) for p in SKIPPABLE_PATTERNS)
 
     for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
-        assert glyph in STATUS_SKIP_GLYPHS, f"missing glyph {glyph!r}"
-    # `⎿` is intentionally excluded — it's a generic tool-result elbow;
-    # the checklist-elbow form is handled in parse_status_line itself.
-    assert "⎿" not in STATUS_SKIP_GLYPHS
+        assert matches(f"  {glyph} Some task"), f"missing glyph {glyph!r}"
+        assert matches(f"  ⎿  {glyph} Some task"), f"missing elbow+glyph {glyph!r}"
+    assert not matches("  ⎿  Installed 1 package")
+    assert not matches("  ⎿  Read 3 lines")
 
 
 def test_invalid_regex_in_ui_pattern_skips_entry(
@@ -215,7 +218,7 @@ def test_successful_load_emits_summary_info(
             "ui_patterns": [
                 {"name": "exit_plan_mode", "top": ["^x$"], "bottom": ["^y$"]},
             ],
-            "skippable_overlays": ["^overlay"],
+            "skippable_patterns": ["^overlay"],
             "status_spinners": [],
             "simple_summary_fields": {"BrandNewTool": "arg"},
             "bare_summary_tools": [],
@@ -226,7 +229,7 @@ def test_successful_load_emits_summary_info(
     assert len(summaries) == 1
     msg = summaries[0].message
     assert "ui_patterns=1" in msg
-    assert "skippable_overlays=1" in msg
+    assert "skippable_patterns=1" in msg
     assert "status_spinners=0" in msg
     assert "simple_summary_fields=1" in msg
     assert "bare_summary_tools=0" in msg
