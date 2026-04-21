@@ -105,20 +105,21 @@ pane up to 15 times at 1-second intervals; the first sample that
 matches wins. Layer 3 is a one-shot log grep since events stay in
 scrollback.
 
-Expected Layer 2 output shape (post-v2.4.0):
+Expected Layer 2 output shape (post-v2.5.0):
 
 ```text
 Spinner text… (…)
-  [>] Task in progress
-  [ ] Task pending
-  ~~[x] Task completed~~
-  … +N pending, M completed
+  ⎿  ◼ Task in progress
+     ◻ Task pending
+     ✔ Task completed
+      … +N pending, M completed
 ```
 
-Rows start with two spaces and an ASCII bracket. Completed rows are
-wrapped in GitHub-flavored double tildes so Telegram's MarkdownV2
-pipeline renders them with native strikethrough. The `[>]` arrow
-marks the in-progress row.
+Rows are whatever CC rendered, verbatim: `⎿` elbow on the first
+checkbox row, original indentation, Unicode checkbox glyphs
+(`◻`/`◼`/`✔`). The frontend translates these into its own markup
+(e.g. ccmux-telegram renders them as ASCII brackets with
+MarkdownV2 strikethrough for completed rows).
 
 ```bash
 set -e
@@ -160,7 +161,7 @@ for attempt in $(seq 1 "$MAX_SAMPLES"); do
             "$pane_file")"
         rm -f "$pane_file"
         case "$parsed" in
-            *…*\[[\ \>x]\]*)
+            *…*[◻◼✔✓☐☒]*)
                 echo "Layer 1 PASS (sample $attempt/$MAX_SAMPLES)"
                 echo "Layer 2 PASS:"
                 printf '%s\n' "$parsed" | sed 's/^/  | /'

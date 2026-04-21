@@ -367,82 +367,6 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 _STATUS_SCAN_WINDOW = 30
 
 
-_TODO_ROW_MAX_LEN = 50
-
-_ELBOW = "⎿"
-_CHECKBOX_GLYPHS: frozenset[str] = frozenset("◼◻☐☒✔✓")
-
-# Map each CC glyph to an ASCII checkbox bracket. ASCII brackets render
-# at a stable narrow width on every client (no emoji variant to worry
-# about), and the symbol inside the bracket already conveys the state
-# so rows stay distinguishable without relying on glyph weight.
-_BOX_PENDING = "[ ]"
-_BOX_IN_PROGRESS = "[>]"
-_BOX_DONE = "[x]"
-
-_BRACKET_MAP: dict[str, str] = {
-    "◻": _BOX_PENDING,
-    "☐": _BOX_PENDING,
-    "◼": _BOX_IN_PROGRESS,
-    "☒": _BOX_DONE,
-    "✔": _BOX_DONE,
-    "✓": _BOX_DONE,
-}
-
-
-_INDENT = "  "
-_STRIKE_OPEN = "~~"
-_STRIKE_CLOSE = "~~"
-
-
-def _normalize_todo_row(line: str) -> str:
-    """Reshape a raw TodoWrite row from the pane for frontend rendering.
-
-    Transformations:
-      - Drop the ``⎿`` elbow connector the first row uses; CC renders
-        it to anchor the checklist under the spinner, but the frontend
-        already groups the status inside its own message bubble.
-      - Normalize leading whitespace to two spaces so every row
-        (checkboxes + overflow tail) aligns at the same left column.
-      - Replace CC's Unicode checkbox glyphs (``◻``/``◼``/``✔``/``✓``
-        /``☐``/``☒``) with ASCII brackets (``[ ]``/``[>]``/``[x]``).
-        ASCII chars never trigger emoji-style rendering, so columns
-        line up no matter which client renders the message.
-      - Wrap completed rows in GitHub-flavored strikethrough
-        (``~~...~~``); the frontend's markdown pipeline converts to
-        MarkdownV2 single-tilde, which Telegram renders natively.
-      - Truncate rows whose total length would exceed
-        ``_TODO_ROW_MAX_LEN``. Truncation happens on the task text
-        *before* the strikethrough wrap so the closing ``~~`` stays
-        balanced and the MarkdownV2 parser doesn't fall back to plain
-        text on an unterminated directive.
-    """
-    stripped = line.lstrip()
-    if stripped.startswith(_ELBOW):
-        stripped = stripped[1:].lstrip()
-
-    if stripped and stripped[0] in _CHECKBOX_GLYPHS:
-        glyph = stripped[0]
-        rest = stripped[1:].lstrip()
-        bracket = _BRACKET_MAP.get(glyph, _BOX_PENDING)
-        body = f"{bracket} {rest}"
-        budget = _TODO_ROW_MAX_LEN - len(_INDENT)
-        if bracket == _BOX_DONE:
-            budget -= len(_STRIKE_OPEN) + len(_STRIKE_CLOSE)
-        if len(body) > budget:
-            body = body[:budget] + "…"
-        if bracket == _BOX_DONE:
-            return f"{_INDENT}{_STRIKE_OPEN}{body}{_STRIKE_CLOSE}"
-        return f"{_INDENT}{body}"
-
-    # Overflow tail ("… +N pending") or any other TODO_PATTERNS match
-    # whose shape doesn't lead with a checkbox glyph.
-    result = f"{_INDENT}{stripped}"
-    if len(result) > _TODO_ROW_MAX_LEN:
-        result = result[:_TODO_ROW_MAX_LEN] + "…"
-    return result
-
-
 def parse_status_line(pane_text: str) -> str | None:
     """Extract the Claude Code RUNNING status line from terminal output.
 
@@ -454,13 +378,14 @@ def parse_status_line(pane_text: str) -> str | None:
       skipped silently.
     - TodoWrite content (``_pc.TODO_PATTERNS`` — checkbox rows, the
       first-row elbow connector, overflow tail) is also skipped during
-      spinner detection, but each matching line is collected and
-      appended to the returned string. Each collected row is truncated
-      to 50 characters so long task names stay within Telegram's
-      status message budget.
+      spinner detection; each matching line is collected verbatim and
+      appended to the returned string in top-to-bottom visual order.
+      This module makes no attempt at cleanup or formatting — the raw
+      pane text is the single source of truth. Frontends render it to
+      whatever markup their target supports.
     - On the first spinner hit, the scan stops and returns the spinner
-      text followed by the collected TodoWrite rows in top-to-bottom
-      visual order, joined by newlines.
+      text followed by the collected TodoWrite rows, joined by
+      newlines.
     - On the first truly unknown line, the scan bails (returns
       ``None``), which keeps stray `·` bullets in regular output from
       producing false positives.
@@ -475,9 +400,9 @@ def parse_status_line(pane_text: str) -> str | None:
     form keeps the displayed timeline clean; the frontend transitions
     straight to IDLE once the running status disappears.
 
-    Returns the composed status text (spinner text, optionally
-    followed by newline-separated TodoWrite rows), or None if no
-    running status line is found.
+    Returns the spinner text (optionally followed by verbatim TodoWrite
+    rows separated by newlines), or None if no running status line is
+    found.
     """
     if not pane_text:
         return None
@@ -497,7 +422,7 @@ def parse_status_line(pane_text: str) -> str | None:
         if any(p.search(line) for p in _pc.OVERLAY_PATTERNS):
             continue
         if any(p.search(line) for p in _pc.TODO_PATTERNS):
-            collected.append(_normalize_todo_row(line))
+            collected.append(line.rstrip())
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:
             text = stripped[1:].strip()
