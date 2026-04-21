@@ -335,7 +335,7 @@ _STATUS_SCAN_WINDOW = 30
 
 
 def parse_status_line(pane_text: str) -> str | None:
-    """Extract the Claude Code status line from terminal output.
+    """Extract the Claude Code RUNNING status line from terminal output.
 
     The status line (spinner + working text) lives above the chrome
     separator (a full line of `─` characters). We locate the separator
@@ -345,7 +345,18 @@ def parse_status_line(pane_text: str) -> str | None:
     on the first truly unknown line, which keeps stray `·` bullets in
     regular output from producing false positives.
 
-    Returns the text after the spinner, or None if no status line found.
+    Only **running** status lines are returned. Completion summaries
+    (``✻ Worked for 56s``, ``· Cogitated for 1m 25s``) share the spinner
+    prefix but represent a finished turn and lack the ``…`` ellipsis
+    that Claude Code uses to signal "still in progress". Treating them
+    as running status leaks throwaway `Worked for 56s` bubbles into the
+    Telegram frontend, which then get eaten by the next user message
+    via status→content conversion. Returning None for the completion
+    form keeps the displayed timeline clean; the frontend transitions
+    straight to IDLE once the running status disappears.
+
+    Returns the text after the spinner, or None if no running status
+    line is found.
     """
     if not pane_text:
         return None
@@ -366,7 +377,10 @@ def parse_status_line(pane_text: str) -> str | None:
         if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:
-            return stripped[1:].strip()
+            text = stripped[1:].strip()
+            if "…" not in text:
+                return None
+            return text
         return None
     return None
 
