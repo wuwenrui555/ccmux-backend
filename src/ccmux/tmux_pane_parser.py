@@ -367,16 +367,43 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
 _STATUS_SCAN_WINDOW = 30
 
 
+_TODO_ROW_MAX_LEN = 50
+
+
+def _truncate_todo_row(line: str) -> str:
+    """Shorten a TodoWrite row to at most ``_TODO_ROW_MAX_LEN`` characters.
+
+    Long task names would otherwise blow up the Telegram status message.
+    Leading whitespace and the checkbox glyph are kept intact so visual
+    hierarchy (indented sub-items, `◼` vs `◻`) remains legible after
+    truncation.
+    """
+    if len(line) <= _TODO_ROW_MAX_LEN:
+        return line
+    return line[:_TODO_ROW_MAX_LEN] + "…"
+
+
 def parse_status_line(pane_text: str) -> str | None:
     """Extract the Claude Code RUNNING status line from terminal output.
 
     The status line (spinner + working text) lives above the chrome
     separator (a full line of `─` characters). We locate the separator
-    first, then scan upward, skipping blanks and lines matching any
-    pattern in ``_pc.SKIPPABLE_PATTERNS`` (overlay modals, TodoWrite
-    checkbox rows, overflow tail). The scan returns the spinner when
-    found and bails on the first truly unknown line, which keeps stray
-    `·` bullets in regular output from producing false positives.
+    first, then scan upward:
+
+    - Blank lines and overlay modal rows (``_pc.OVERLAY_PATTERNS``) are
+      skipped silently.
+    - TodoWrite content (``_pc.TODO_PATTERNS`` — checkbox rows, the
+      first-row elbow connector, overflow tail) is also skipped during
+      spinner detection, but each matching line is collected and
+      appended to the returned string. Each collected row is truncated
+      to 50 characters so long task names stay within Telegram's
+      status message budget.
+    - On the first spinner hit, the scan stops and returns the spinner
+      text followed by the collected TodoWrite rows in top-to-bottom
+      visual order, joined by newlines.
+    - On the first truly unknown line, the scan bails (returns
+      ``None``), which keeps stray `·` bullets in regular output from
+      producing false positives.
 
     Only **running** status lines are returned. Completion summaries
     (``✻ Worked for 56s``, ``· Cogitated for 1m 25s``) share the spinner
@@ -388,8 +415,9 @@ def parse_status_line(pane_text: str) -> str | None:
     form keeps the displayed timeline clean; the frontend transitions
     straight to IDLE once the running status disappears.
 
-    Returns the text after the spinner, or None if no running status
-    line is found.
+    Returns the composed status text (spinner text, optionally
+    followed by newline-separated TodoWrite rows), or None if no
+    running status line is found.
     """
     if not pane_text:
         return None
@@ -400,17 +428,24 @@ def parse_status_line(pane_text: str) -> str | None:
     if chrome_idx is None:
         return None
 
+    collected: list[str] = []  # reversed (bottom-up) order
     for i in range(chrome_idx - 1, max(chrome_idx - 1 - _STATUS_SCAN_WINDOW, -1), -1):
         line = lines[i]
         stripped = line.strip()
         if not stripped:
             continue
-        if any(p.search(line) for p in _pc.SKIPPABLE_PATTERNS):
+        if any(p.search(line) for p in _pc.OVERLAY_PATTERNS):
+            continue
+        if any(p.search(line) for p in _pc.TODO_PATTERNS):
+            collected.append(_truncate_todo_row(line.rstrip()))
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:
             text = stripped[1:].strip()
             if "…" not in text:
                 return None
+            if collected:
+                collected.reverse()
+                return text + "\n" + "\n".join(collected)
             return text
         return None
     return None

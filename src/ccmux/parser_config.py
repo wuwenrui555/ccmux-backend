@@ -9,7 +9,9 @@ import them directly rather than re-deriving the composition locally.
 Public constants (post-merge):
   - UI_PATTERNS
   - STATUS_SPINNERS
-  - SKIPPABLE_PATTERNS
+  - OVERLAY_PATTERNS
+  - TODO_PATTERNS
+  - SKIPPABLE_PATTERNS  (union of the two above)
   - SIMPLE_SUMMARY_FIELDS
   - BARE_SUMMARY_TOOLS
 """
@@ -172,26 +174,32 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
 _BUILTIN_STATUS_SPINNERS: frozenset[str] = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 
 # Lines that `parse_status_line` treats as free-skip between the spinner
-# and the chrome separator. A match consumes one scan slot (capped by
-# `_STATUS_SCAN_WINDOW`) without bailing.
+# and the chrome separator. Split into two buckets with different
+# disposition when the scan crosses them:
 #
-# Covers three kinds of content that legitimately stack above the spinner:
+# - OVERLAY patterns: skipped but NOT included in the returned status
+#   text. Used for modals that are irrelevant to Claude's working
+#   context (e.g. the session-rating prompt). The Telegram renderer
+#   shouldn't surface these.
 #
-# 1. Overlay modals (e.g. session-rating prompt).
-# 2. TodoWrite checkbox rows — each glyph on its own, plus the compound
-#    `⎿  <checkbox>` elbow form used on the first row to connect the
-#    checklist to the spinner above it.
-# 3. Overflow tail when the TodoWrite list exceeds the render window:
-#    `      … +N pending[, M completed]`.
+# - TODO patterns: skipped during spinner detection AND collected into
+#   the returned status text so the frontend can render task context
+#   alongside the spinner. Covers TodoWrite checkbox rows, the
+#   first-row `⎿  <checkbox>` elbow connector, and the
+#   `      … +N pending[, M completed]` overflow tail.
 #
-# `⎿` alone is intentionally NOT covered — it's Claude's generic tree-elbow
-# and appears on every Bash/tool result line (`  ⎿  Installed 1 package`).
-# Matching `⎿` without a trailing checkbox would let the upward scan cross
-# tool-output blocks and return a stale spinner from scrollback.
-_BUILTIN_SKIPPABLE_PATTERNS: tuple[re.Pattern[str], ...] = (
+# `⎿` alone is intentionally NOT in TODO_PATTERNS — Claude's generic
+# tree-elbow appears on every Bash/tool result line
+# (`  ⎿  Installed 1 package`). Matching `⎿` without a trailing
+# checkbox would let the upward scan cross tool-output blocks and
+# return a stale spinner from scrollback.
+_BUILTIN_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Session-rating modal (CC 2.1.x+).
     re.compile(r"^\s*●\s*How is Claude doing this session\?"),
     re.compile(r"^\s*1:\s*Bad\b"),
+)
+
+_BUILTIN_TODO_PATTERNS: tuple[re.Pattern[str], ...] = (
     # TodoWrite checkbox rows (bare and with first-row elbow connector).
     re.compile(r"^\s*[◼◻☐☒✔✓]"),
     re.compile(r"^\s*⎿\s+[◼◻☐☒✔✓]"),
@@ -382,10 +390,19 @@ UI_PATTERNS: list[UIPattern] = list(_OVERRIDES.ui_patterns) + _BUILTIN_UI_PATTER
 # Sets take the union.
 STATUS_SPINNERS: frozenset[str] = _BUILTIN_STATUS_SPINNERS | _OVERRIDES.status_spinners
 
-# User skippable_patterns prepend (same reasoning as ui_patterns).
-SKIPPABLE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    _OVERRIDES.skippable_patterns + _BUILTIN_SKIPPABLE_PATTERNS
+# User `skippable_patterns` overrides always go into the OVERLAY bucket
+# (skip but don't display). Semantics are conservative: if a user adds
+# a pattern to dismiss a new CC modal, they won't accidentally leak it
+# into the status text. Extending TODO_PATTERNS is reserved for
+# built-in maintenance.
+OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    _OVERRIDES.skippable_patterns + _BUILTIN_OVERLAY_PATTERNS
 )
+
+TODO_PATTERNS: tuple[re.Pattern[str], ...] = _BUILTIN_TODO_PATTERNS
+
+# Union, for callers that only care whether a line is skippable at all.
+SKIPPABLE_PATTERNS: tuple[re.Pattern[str], ...] = OVERLAY_PATTERNS + TODO_PATTERNS
 
 # Dict merge: user wins per key.
 SIMPLE_SUMMARY_FIELDS: dict[str, str] = {
