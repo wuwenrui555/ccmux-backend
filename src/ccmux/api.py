@@ -26,17 +26,29 @@ from .backend import (
 
 # --- 2. Data types --------------------------------------------------------
 
-# Event payloads (pushed to on_message / on_status callbacks)
-from .claude_transcript_parser import ClaudeMessage
-from .status_monitor import PaneState, WindowStatus
+# State family (emitted via on_state)
+from .claude_state import (
+    BlockedUI,
+    Blocked,
+    ClaudeState,
+    Dead,
+    Idle,
+    Working,
+)
+
+# Message family (emitted via on_message)
+from .claude_transcript_parser import ClaudeMessage, TranscriptParser
+
+# Instance model
+from .claude_instance import ClaudeInstance, ClaudeInstanceRegistry, ClaudeSession
+
+# Parser data types
 from .tmux_pane_parser import InteractiveUIContent, UsageInfo
 
-# Query returns (from Protocol method calls)
-from .window_bindings import WindowBinding, ClaudeSession
+# Query returns
 from .tmux import TmuxWindow
 
-# Composition inputs (constructed by frontend, passed to DefaultBackend)
-from .window_bindings import WindowBindings
+# Composition inputs
 from .tmux import TmuxSessionRegistry
 
 # --- 3. Parsers -----------------------------------------------------------
@@ -47,7 +59,6 @@ from .tmux_pane_parser import (
     parse_status_line,
     parse_usage_output,
 )
-from .claude_transcript_parser import TranscriptParser
 
 # --- 4. Composition helpers -----------------------------------------------
 
@@ -62,25 +73,31 @@ __all__ = [
     "DefaultBackend",
     "get_default_backend",
     "set_default_backend",
-    # Event payloads
+    # State family
+    "ClaudeState",
+    "Working",
+    "Idle",
+    "Blocked",
+    "Dead",
+    "BlockedUI",
+    # Message / transcript
     "ClaudeMessage",
-    "WindowStatus",
-    "PaneState",
+    "TranscriptParser",
+    # Instance model
+    "ClaudeInstance",
+    "ClaudeInstanceRegistry",
+    "ClaudeSession",
+    # Composition inputs
+    "TmuxSessionRegistry",
+    # Parser surfaces
     "InteractiveUIContent",
     "UsageInfo",
-    # Query returns
-    "WindowBinding",
-    "ClaudeSession",
-    "TmuxWindow",
-    # Composition inputs
-    "WindowBindings",
-    "TmuxSessionRegistry",
-    # Parsers
     "extract_bash_output",
     "extract_interactive_content",
     "parse_status_line",
     "parse_usage_output",
-    "TranscriptParser",
+    # Query types
+    "TmuxWindow",
     # Composition helpers
     "tmux_registry",
     "sanitize_session_name",
