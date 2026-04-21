@@ -1,11 +1,57 @@
 # Changelog
 
+<!-- markdownlint-disable MD024 -->
+
 All notable changes to `ccmux` are documented here. The project follows
 [Semantic Versioning](https://semver.org/): the public surface
 (`ccmux.api`) is stable across minor and patch releases; breaking changes
 require a major bump.
 
 ## [Unreleased]
+
+## 2.0.0 — 2026-04-20
+
+Refactor organizes the entire backend around a sealed four-case
+`ClaudeState` union keyed per `ClaudeInstance`. Replaces the flat
+`WindowStatus` + old `PaneState` StrEnum with a pattern-matchable type
+family and a two-callback Backend protocol. Frontends pinned to
+v1.x are not compatible and must upgrade in lockstep.
+
+### Breaking changes — `ccmux.api`
+
+| Removed | Replacement |
+|---|---|
+| `WindowStatus` | two callbacks: `on_state(instance_id, ClaudeState)` + `on_message(instance_id, ClaudeMessage)` |
+| `PaneState` (StrEnum) | `ClaudeState` sealed union: `Working \| Idle \| Blocked \| Dead` |
+| `InteractiveUIContent.name: str` | `InteractiveUIContent.ui: BlockedUI` |
+| `WindowBinding` | `ClaudeInstance` (`session_name` → `instance_id`, `claude_session_id` → `session_id`) |
+| `WindowBindings` | `ClaudeInstanceRegistry` (primary getter is `get(instance_id)`) |
+| `Backend.is_alive(window_id)` | no direct replacement; consumers maintain `{instance_id: last_state}` and treat anything other than `Dead` as alive |
+| `Backend.get_window_binding(window_id)` | `Backend.get_instance(instance_id)` |
+| `Backend.start(on_message, on_status)` | `Backend.start(on_state, on_message)` (argument order changed) |
+
+### Breaking changes — persistence
+
+- `$CCMUX_DIR/window_bindings.json` → `$CCMUX_DIR/claude_instances.json`
+- Inside the file, outer keys that were conceptually `session_name`
+  are now `instance_id`. The inner dict shape (`window_id`,
+  `session_id`, `cwd`) is unchanged.
+- **No migration.** On upgrade the old file is ignored; users re-bind
+  their Claude sessions.
+
+### Internal changes
+
+- `status_monitor.py` and `liveness.py` merged into `state_monitor.py`.
+- `window_bindings.py` renamed to `claude_instance.py`.
+- New `claude_state.py` hosts the sealed union and `BlockedUI` enum.
+- `LivenessChecker._window_alive` cache deleted — liveness is now
+  expressed as the `Dead` variant on `ClaudeState`.
+- `MessageMonitor.poll()` returns `(instance_id, ClaudeMessage)` pairs
+  so backends can route per-instance without a separate lookup.
+- `DefaultBackend` owns the auto-resume coordinator directly; it
+  subscribes to `Dead` state observations from `StateMonitor` and
+  retries `claude --resume` with an idempotency guard against
+  concurrent fires.
 
 ## 1.3.1 — 2026-04-20
 
@@ -171,8 +217,8 @@ First stable release. The `ccmux.api` surface is now frozen.
 - `TranscriptParser` no longer injects Telegram-specific sentinel tokens
   into `ClaudeMessage.text`. Collapsible regions (tool output, thinking,
   diffs, long command results) are emitted as standard CommonMark
-  blockquotes (lines prefixed with `> `). Frontends that want a
-  collapsible UI detect the `> ` prefix and render locally; plain-text
+  blockquotes (lines prefixed with `>`). Frontends that want a
+  collapsible UI detect the `>` prefix and render locally; plain-text
   consumers see readable quoted lines.
 - `LivenessChecker.__init__` now takes an explicit `tmux_registry:
   TmuxSessionRegistry` argument. `StatusMonitor.__init__` accepts the
@@ -218,7 +264,7 @@ First stable release. The `ccmux.api` surface is now frozen.
 
 If you consumed `TranscriptParser.EXPANDABLE_QUOTE_START` /
 `EXPANDABLE_QUOTE_END`, switch to detecting standard Markdown
-blockquotes: any line starting with `> ` (with an optional space) is
+blockquotes: any line starting with `>` (with a space after) is
 part of a collapsible region. See `ccmux-telegram` v1.0+ for a reference
-renderer that converts `> ` blocks to Telegram MarkdownV2 expandable
+renderer that converts `>` blocks to Telegram MarkdownV2 expandable
 blockquotes.

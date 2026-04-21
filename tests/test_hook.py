@@ -135,7 +135,7 @@ class TestHookMainValidation:
                 "hook_event_name": "SessionStart",
             },
         )
-        assert not (tmp_path / "window_bindings.json").exists()
+        assert not (tmp_path / "claude_instances.json").exists()
 
     def test_invalid_uuid_format(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -149,7 +149,7 @@ class TestHookMainValidation:
                 "hook_event_name": "SessionStart",
             },
         )
-        assert not (tmp_path / "window_bindings.json").exists()
+        assert not (tmp_path / "claude_instances.json").exists()
 
     def test_no_tmux_pane_skips(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -163,7 +163,7 @@ class TestHookMainValidation:
                 "hook_event_name": "SessionStart",
             },
         )
-        assert not (tmp_path / "window_bindings.json").exists()
+        assert not (tmp_path / "claude_instances.json").exists()
 
     def test_non_session_start_event(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -177,11 +177,11 @@ class TestHookMainValidation:
                 "hook_event_name": "Stop",
             },
         )
-        assert not (tmp_path / "window_bindings.json").exists()
+        assert not (tmp_path / "claude_instances.json").exists()
 
 
 class TestHookSessionMapWrite:
-    """Tests that verify actual window_bindings.json writing behavior.
+    """Tests that verify actual claude_instances.json writing behavior.
 
     These mock subprocess.run (tmux display-message) and TMUX_PANE to
     simulate running inside a tmux pane.
@@ -220,7 +220,7 @@ class TestHookSessionMapWrite:
             "aclf:@4\n",
         )
 
-        data = json.loads((tmp_path / "window_bindings.json").read_text())
+        data = json.loads((tmp_path / "claude_instances.json").read_text())
         assert data["aclf"]["window_id"] == "@4"
         assert data["aclf"]["session_id"] == "550e8400-e29b-41d4-a716-446655440000"
         assert data["aclf"]["cwd"] == "/home/user/project"
@@ -251,7 +251,7 @@ class TestHookSessionMapWrite:
             "daily:@3\n",
         )
 
-        data = json.loads((tmp_path / "window_bindings.json").read_text())
+        data = json.loads((tmp_path / "claude_instances.json").read_text())
         assert data["daily"]["session_id"] == "bbbb0000-0000-0000-0000-000000000000"
 
     def test_different_window_refuses_overwrite(
@@ -280,7 +280,7 @@ class TestHookSessionMapWrite:
             "aclf:@9\n",
         )
 
-        data = json.loads((tmp_path / "window_bindings.json").read_text())
+        data = json.loads((tmp_path / "claude_instances.json").read_text())
         assert data["aclf"]["window_id"] == "@4"
         assert data["aclf"]["session_id"] == "aaaa0000-0000-0000-0000-000000000000"
 
@@ -589,7 +589,7 @@ class TestResolveSessionViaPid:
 
 class TestHookMainEmptyStdinFallback:
     """When Claude Code sends empty stdin, hook_main must reconstruct
-    session_id + cwd via the PID fallback and still write window_bindings.json.
+    session_id + cwd via the PID fallback and still write claude_instances.json.
     """
 
     def _lay_out_claude_home(
@@ -679,7 +679,7 @@ class TestHookMainEmptyStdinFallback:
 
         hook_main()
 
-        data = json.loads((ccmux_dir / "window_bindings.json").read_text())
+        data = json.loads((ccmux_dir / "claude_instances.json").read_text())
         assert data["ccmux"]["window_id"] == "@16"
         assert data["ccmux"]["session_id"] == new_session_id
         assert data["ccmux"]["cwd"] == "/mnt/data/project"
@@ -713,7 +713,7 @@ class TestHookMainEmptyStdinFallback:
 
         hook_main()  # must not raise
 
-        assert not (ccmux_dir / "window_bindings.json").exists()
+        assert not (ccmux_dir / "claude_instances.json").exists()
 
     def test_invalid_uuid_in_stdin_triggers_fallback(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -756,4 +756,4 @@ class TestHookMainEmptyStdinFallback:
 
         hook_main()
 
-        assert not (ccmux_dir / "window_bindings.json").exists()
+        assert not (ccmux_dir / "claude_instances.json").exists()

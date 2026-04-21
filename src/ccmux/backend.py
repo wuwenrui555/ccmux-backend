@@ -1,25 +1,17 @@
 """Backend — the single Protocol any frontend drives.
 
-The contract is split into two sub-Protocols by domain:
+Split into two sub-Protocols by domain (TmuxOps, ClaudeOps) and a
+top-level Backend that orchestrates the poll loops.
 
-- `TmuxOps` — everything that touches tmux (send_text, send_keys,
-  capture_pane, create_window, list_windows).
-- `ClaudeOps` — everything that touches Claude Code's JSONL side
-  (list_sessions, get_history).
+Backend emits two kinds of observation via two callbacks:
 
-Cross-domain queries (`is_alive`, `get_window_binding`) and the lifecycle
-methods (`start`, `stop`) live on the top-level `Backend`.
+- on_state(instance_id, ClaudeState) — per fast tick per known instance
+  (or on slow-tick Dead detection)
+- on_message(instance_id, ClaudeMessage) — per new JSONL line
 
-The smart-backend semantics: `tmux.send_text` is idempotent wrt Claude
-liveness (auto-resumes dead Claude before sending on the slow loop
-cycle); `start()` spawns the fast/slow poll loops internally and pushes
-every event to `on_message` / `on_status`.
-
-Module-level default singleton (`get_default_backend` /
-`set_default_backend`) lets callers that cannot easily thread a backend
-handle through (e.g. Telegram handlers that receive only `Update` +
-`Context`) reach the backend without bot_data dict lookups. Tests can
-swap the singleton by calling `set_default_backend` with a fake.
+The DefaultBackend owns the fast/slow tasks, injects state_monitor /
+message_monitor with an internal fan-in, and handles auto-resume
+when state_monitor reports Dead.
 """
 
 from __future__ import annotations
@@ -29,100 +21,53 @@ import logging
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
+from .claude_files import ClaudeFileResolver
+from .claude_instance import ClaudeInstance, ClaudeInstanceRegistry, ClaudeSession
+from .claude_state import ClaudeState, Dead
+from .claude_transcript_parser import ClaudeMessage
 from .config import config
 from .message_monitor import MessageMonitor
-from .status_monitor import StatusMonitor, WindowStatus
-from .claude_files import ClaudeFileResolver
-from .liveness import LivenessChecker
-from .window_bindings import ClaudeSession, WindowBindings, WindowBinding
+from .state_monitor import StateMonitor
 from .tmux import TmuxSessionRegistry, TmuxWindow
-from .claude_transcript_parser import ClaudeMessage
 
 logger = logging.getLogger(__name__)
 
 
 class TmuxOps(Protocol):
-    """Tmux-side of the Backend contract.
-
-    All methods are idempotent and internally handle tmux liveness.
-    """
-
-    async def send_text(self, window_id: str, text: str) -> tuple[bool, str]:
-        """Send text to the window's pane. Returns (success, message)."""
-        ...
-
-    async def send_keys(self, window_id: str, keys: list[str]) -> None:
-        """Send special keys (e.g. Up, Enter, Escape) in order to a window."""
-        ...
-
-    async def capture_pane(self, window_id: str) -> str:
-        """Capture the visible text of the window's active pane (empty on error)."""
-        ...
-
-    async def create_window(self, cwd: str, session_name: str | None = None) -> str:
-        """Create a new tmux window running `claude` in cwd. Returns window_id."""
-        ...
-
-    async def list_windows(self) -> list[TmuxWindow]:
-        """Return TmuxWindow entries across every registered tmux session."""
-        ...
+    async def send_text(self, window_id: str, text: str) -> tuple[bool, str]: ...
+    async def send_keys(self, window_id: str, keys: list[str]) -> None: ...
+    async def capture_pane(self, window_id: str) -> str: ...
+    async def create_window(self, cwd: str, session_name: str | None = None) -> str: ...
+    async def list_windows(self) -> list[TmuxWindow]: ...
 
 
 class ClaudeOps(Protocol):
-    """Claude-side of the Backend contract (JSONL transcripts)."""
-
-    async def list_sessions(self, cwd: str) -> list[ClaudeSession]:
-        """Return Claude JSONL session summaries for a cwd, newest first."""
-        ...
-
+    async def list_sessions(self, cwd: str) -> list[ClaudeSession]: ...
     async def get_history(
         self,
         session_id: str,
         *,
         start_byte: int = 0,
         end_byte: int | None = None,
-    ) -> list[dict]:
-        """Read parsed JSONL messages for a Claude session, with byte slicing."""
-        ...
+    ) -> list[dict]: ...
 
 
 class Backend(Protocol):
-    """Single Protocol the frontend drives.
-
-    Tmux operations live on `backend.tmux`, Claude-JSONL operations on
-    `backend.claude`. Cross-domain queries stay at the top level because
-    they naturally span both sides.
-    """
-
     tmux: TmuxOps
     claude: ClaudeOps
 
-    # --- Queries (cross-domain) ---
-    def is_alive(self, window_id: str) -> bool:
-        """Return the last cached liveness verdict (tmux + Claude) for a window."""
-        ...
+    def get_instance(self, instance_id: str) -> ClaudeInstance | None: ...
 
-    def get_window_binding(self, window_id: str) -> WindowBinding | None:
-        """Joint view: window_id → tmux session + Claude session_id + cwd."""
-        ...
-
-    # --- Lifecycle ---
     async def start(
         self,
-        on_message: Callable[[ClaudeMessage], Awaitable[None]],
-        on_status: Callable[[WindowStatus], Awaitable[None]],
-    ) -> None:
-        """Spawn the fast (message + status) and slow (verify) poll loops."""
-        ...
+        on_state: Callable[[str, ClaudeState], Awaitable[None]],
+        on_message: Callable[[str, ClaudeMessage], Awaitable[None]],
+    ) -> None: ...
 
-    async def stop(self) -> None:
-        """Cancel internal tasks and persist monitor state."""
-        ...
+    async def stop(self) -> None: ...
 
 
 class _TmuxOpsImpl:
-    """Concrete tmux-ops bundle used by DefaultBackend."""
-
     def __init__(self, tmux_registry: TmuxSessionRegistry) -> None:
         self._tmux_registry = tmux_registry
 
@@ -163,18 +108,14 @@ class _TmuxOpsImpl:
 
 
 class _ClaudeOpsImpl:
-    """Concrete claude-ops bundle used by DefaultBackend."""
-
     def __init__(self, files: ClaudeFileResolver) -> None:
         self._files = files
 
     async def list_sessions(self, cwd: str) -> list[ClaudeSession]:
-        """Scan `<projects>/<encoded-cwd>/*.jsonl`, newest first."""
-        encoded = WindowBindings.encode_cwd(cwd)
+        encoded = ClaudeInstanceRegistry.encode_cwd(cwd)
         project_dir = config.claude_projects_path / encoded
         if not project_dir.exists():
             return []
-
         paths: list[Path] = sorted(
             project_dir.glob("*.jsonl"),
             key=lambda p: p.stat().st_mtime,
@@ -203,91 +144,93 @@ class _ClaudeOpsImpl:
 
 
 class DefaultBackend:
-    """Default tmux-backed Backend composing the existing collaborators.
+    """Default tmux-backed Backend.
 
-    Internal fast loop (`config.monitor_poll_interval`): reload session map,
-    poll MessageMonitor + StatusMonitor in parallel, fan out events through
-    `on_message` and `on_status`.
+    Owns the fast and slow poll tasks and the auto-resume coordinator.
+    StateMonitor (fast tick: pane classification; slow tick: process
+    probe) reports every ClaudeState observation to
+    ``on_state_with_resume``, which fans out to the caller's ``on_state``
+    first (so the UI reflects Dead before any recovery runs) and then
+    attempts ``claude --resume`` in the same tmux session when the
+    observed state is Dead. Re-entry during an in-flight resume is
+    suppressed by ``self._resuming``.
 
-    Internal slow loop (60 s): run `LivenessChecker.verify_all()` to reconcile
-    tmux/Claude liveness and auto-resume dead Claude sessions.
+    MessageMonitor runs on the fast tick alongside StateMonitor; each
+    new JSONL line is paired with its ``instance_id`` and handed to the
+    caller's ``on_message``.
     """
 
     def __init__(
         self,
         tmux_registry: TmuxSessionRegistry,
-        window_bindings: WindowBindings,
+        registry: ClaudeInstanceRegistry,
         message_monitor: MessageMonitor | None = None,
-        status_monitor: StatusMonitor | None = None,
         slow_interval: float = 60.0,
         show_user_messages: bool | None = None,
     ) -> None:
         self._tmux_registry = tmux_registry
-        self._window_bindings = window_bindings
-        self._liveness = LivenessChecker(window_bindings, tmux_registry)
-        self._files = ClaudeFileResolver(window_bindings)
+        self._registry = registry
+        self._files = ClaudeFileResolver(registry)
         self._message_monitor = message_monitor or MessageMonitor(
-            window_bindings=window_bindings,
+            registry=registry,
             show_user_messages=show_user_messages,
-        )
-        self._status_monitor = status_monitor or StatusMonitor(
-            window_bindings=window_bindings,
-            tmux_registry=tmux_registry,
         )
         self._slow_interval = slow_interval
         self._fast_task: asyncio.Task[None] | None = None
         self._slow_task: asyncio.Task[None] | None = None
+        self._resuming: set[str] = set()
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
 
-    # ------------------------------------------------------------------
-    # Queries (cross-domain)
-    # ------------------------------------------------------------------
+    # --- Queries -----------------------------------------------------
 
-    def is_alive(self, window_id: str) -> bool:
-        return self._liveness.is_alive(window_id)
+    def get_instance(self, instance_id: str) -> ClaudeInstance | None:
+        return self._registry.get(instance_id)
 
-    def get_window_binding(self, window_id: str) -> WindowBinding | None:
-        return self._window_bindings.get(window_id)
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
+    # --- Lifecycle ---------------------------------------------------
 
     async def start(
         self,
-        on_message: Callable[[ClaudeMessage], Awaitable[None]],
-        on_status: Callable[[WindowStatus], Awaitable[None]],
+        on_state: Callable[[str, ClaudeState], Awaitable[None]],
+        on_message: Callable[[str, ClaudeMessage], Awaitable[None]],
     ) -> None:
         self._message_monitor.startup_cleanup()
-        # Populate liveness cache eagerly so is_alive() returns real
-        # verdicts from the very first fast-loop tick (not optimistic True).
-        await self._liveness.verify_all()
+
+        async def on_state_with_resume(instance_id: str, state: ClaudeState) -> None:
+            try:
+                await on_state(instance_id, state)
+            except Exception as e:
+                logger.debug("on_state consumer error: %s", e)
+            if isinstance(state, Dead):
+                try:
+                    await self._try_resume(instance_id)
+                except Exception as e:
+                    logger.warning("auto-resume failed for %s: %s", instance_id, e)
+
+        state_monitor = StateMonitor(
+            registry=self._registry,
+            tmux_registry=self._tmux_registry,
+            on_state=on_state_with_resume,
+        )
 
         async def fast_loop() -> None:
             logger.info(
                 "Fast poll loop started (interval: %ss)",
                 config.monitor_poll_interval,
             )
-
             while True:
                 try:
-                    await self._window_bindings.load()
-                    new_messages, statuses = await asyncio.gather(
+                    await self._registry.load()
+                    new_pairs, _ = await asyncio.gather(
                         self._message_monitor.poll(),
-                        self._status_monitor.poll(),
+                        state_monitor.fast_tick(),
                     )
-                    for msg in new_messages:
+                    for instance_id, msg in new_pairs:
                         try:
-                            await on_message(msg)
+                            await on_message(instance_id, msg)
                         except Exception as e:
                             logger.debug("on_message consumer error: %s", e)
-                    for s in statuses:
-                        try:
-                            await on_status(s)
-                        except Exception as e:
-                            logger.debug("on_status consumer error: %s", e)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -298,7 +241,7 @@ class DefaultBackend:
             logger.info("Slow poll loop started (interval: %ss)", self._slow_interval)
             while True:
                 try:
-                    await self._liveness.verify_all()
+                    await state_monitor.slow_tick()
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -329,24 +272,49 @@ class DefaultBackend:
         except Exception as e:
             logger.debug("message monitor shutdown error: %s", e)
 
+    # --- Auto-resume -------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Module-level default singleton
-# ---------------------------------------------------------------------------
+    async def _try_resume(self, instance_id: str) -> None:
+        if instance_id in self._resuming:
+            logger.debug("resume already in flight for %s; skipping", instance_id)
+            return
+        self._resuming.add(instance_id)
+        try:
+            inst = self._registry.get(instance_id)
+            if inst is None:
+                return
+            cwd = inst.cwd or str(Path.home())
+            logger.info(
+                "Attempting to resume Claude session %s in instance %s (cwd=%s)",
+                inst.session_id,
+                instance_id,
+                cwd,
+            )
+            tm = self._tmux_registry.get_or_create(instance_id)
+            ok, msg, _, new_wid = await tm.create_window(
+                work_dir=cwd, resume_session_id=inst.session_id
+            )
+            if ok:
+                logger.info("Resumed %s in window %s", inst.session_id, new_wid)
+            else:
+                logger.warning("Failed to resume %s: %s", inst.session_id, msg)
+        finally:
+            self._resuming.discard(instance_id)
+
+
+# --- Module-level default singleton --------------------------------------
 
 _default_backend: Backend | None = None
 
 
-def set_default_backend(backend: Backend | None) -> None:
-    """Install the process-wide default Backend. Pass None to clear."""
-    global _default_backend
-    _default_backend = backend
-
-
 def get_default_backend() -> Backend:
-    """Return the installed default backend, or raise if unset."""
     if _default_backend is None:
         raise RuntimeError(
-            "No default Backend installed. Call set_default_backend first."
+            "Default backend not set; call set_default_backend() before accessing."
         )
     return _default_backend
+
+
+def set_default_backend(backend: Backend | None) -> None:
+    global _default_backend
+    _default_backend = backend

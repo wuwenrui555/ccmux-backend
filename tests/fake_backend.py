@@ -1,16 +1,8 @@
-"""In-memory FakeBackend that satisfies the Backend Protocol.
+"""In-memory FakeBackend that satisfies the new Backend Protocol.
 
 Use in tests that need to exercise frontend code paths without
-spinning up tmux, JSONL files, or polling loops. Records every call on
-`.calls` and exposes knobs for canned return values.
-
-Example:
-
-    fake = FakeBackend()
-    fake.window_binding["@0"] = WindowBinding(...)
-    fake.alive["@0"] = True
-    set_default_backend(fake)
-    ...
+spinning up tmux, JSONL files, or polling loops. Records every call
+on `.calls` and exposes knobs for canned return values.
 """
 
 from __future__ import annotations
@@ -18,16 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from ccmux.status_monitor import WindowStatus
-from ccmux.tmux import TmuxWindow
+from ccmux.claude_instance import ClaudeInstance, ClaudeSession
+from ccmux.claude_state import ClaudeState
 from ccmux.claude_transcript_parser import ClaudeMessage
-from ccmux.window_bindings import ClaudeSession, WindowBinding
+from ccmux.tmux import TmuxWindow
 
 
 @dataclass
 class _FakeTmuxOps:
-    """Tmux-side fake. Shares the parent backend's call log and state."""
-
     _parent: FakeBackend
 
     async def send_text(self, window_id: str, text: str) -> tuple[bool, str]:
@@ -52,8 +42,6 @@ class _FakeTmuxOps:
 
 @dataclass
 class _FakeClaudeOps:
-    """Claude-JSONL-side fake. Shares the parent backend's call log and state."""
-
     _parent: FakeBackend
 
     async def list_sessions(self, cwd: str) -> list[ClaudeSession]:
@@ -75,21 +63,15 @@ class _FakeClaudeOps:
 
 @dataclass
 class FakeBackend:
-    """In-memory double for the Backend Protocol.
-
-    Sub-namespace impls (`.tmux`, `.claude`) record onto the same `calls`
-    list, prefixed with their domain — so tests can assert precise
-    dispatch (`"tmux.send_text"` vs `"claude.get_history"`).
-    """
+    """In-memory double for the new Backend Protocol."""
 
     calls: list[tuple[str, tuple, dict]] = field(default_factory=list)
-    window_binding: dict[str, WindowBinding] = field(default_factory=dict)
-    alive: dict[str, bool] = field(default_factory=dict)
+    instances: dict[str, ClaudeInstance] = field(default_factory=dict)
     pane_text: dict[str, str] = field(default_factory=dict)
     claude_sessions: dict[str, list[ClaudeSession]] = field(default_factory=dict)
     history: dict[str, list[dict]] = field(default_factory=dict)
-    on_message: Callable[[ClaudeMessage], Awaitable[None]] | None = None
-    on_status: Callable[[WindowStatus], Awaitable[None]] | None = None
+    on_state: Callable[[str, ClaudeState], Awaitable[None]] | None = None
+    on_message: Callable[[str, ClaudeMessage], Awaitable[None]] | None = None
     started: bool = False
     stopped: bool = False
     tmux: Any = field(init=False)
@@ -102,22 +84,18 @@ class FakeBackend:
     def _record(self, name: str, *args, **kwargs) -> None:
         self.calls.append((name, args, kwargs))
 
-    def is_alive(self, window_id: str) -> bool:
-        self._record("is_alive", window_id)
-        return self.alive.get(window_id, False)
-
-    def get_window_binding(self, window_id: str) -> WindowBinding | None:
-        self._record("get_window_binding", window_id)
-        return self.window_binding.get(window_id)
+    def get_instance(self, instance_id: str) -> ClaudeInstance | None:
+        self._record("get_instance", instance_id)
+        return self.instances.get(instance_id)
 
     async def start(
         self,
-        on_message: Callable[[ClaudeMessage], Awaitable[None]],
-        on_status: Callable[[WindowStatus], Awaitable[None]],
+        on_state: Callable[[str, ClaudeState], Awaitable[None]],
+        on_message: Callable[[str, ClaudeMessage], Awaitable[None]],
     ) -> None:
         self._record("start")
+        self.on_state = on_state
         self.on_message = on_message
-        self.on_status = on_status
         self.started = True
 
     async def stop(self) -> None:
@@ -126,12 +104,10 @@ class FakeBackend:
 
     # ---- Test-helper methods (not part of the Protocol) ----
 
-    async def emit_message(self, msg: ClaudeMessage) -> None:
-        """Simulate a real-time ClaudeMessage dispatch to the registered callback."""
-        assert self.on_message is not None, "Call start() before emit_message()"
-        await self.on_message(msg)
+    async def emit_state(self, instance_id: str, state: ClaudeState) -> None:
+        assert self.on_state is not None, "Call start() before emit_state()"
+        await self.on_state(instance_id, state)
 
-    async def emit_status(self, status: WindowStatus) -> None:
-        """Simulate a WindowStatus dispatch to the registered callback."""
-        assert self.on_status is not None, "Call start() before emit_status()"
-        await self.on_status(status)
+    async def emit_message(self, instance_id: str, msg: ClaudeMessage) -> None:
+        assert self.on_message is not None, "Call start() before emit_message()"
+        await self.on_message(instance_id, msg)

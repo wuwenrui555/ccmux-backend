@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ccmux import parser_config as pc
+from ccmux.claude_state import BlockedUI
 from ccmux.parser_config import UIPattern
 
 
@@ -52,7 +53,7 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
             "$schema_version": 1,
             "ui_patterns": [
                 {
-                    "name": "Custom",
+                    "name": "exit_plan_mode",
                     "top": ["^Custom top"],
                     "bottom": ["^Custom bottom"],
                     "min_gap": 3,
@@ -71,7 +72,7 @@ def test_load_parses_all_sections(isolated_ccmux_dir: Path) -> None:
     # ui_patterns (tuple)
     assert len(result.ui_patterns) == 1
     p = result.ui_patterns[0]
-    assert p.name == "Custom"
+    assert p.name is BlockedUI.EXIT_PLAN_MODE
     assert p.top[0].pattern == "^Custom top"
     assert p.bottom[0].pattern == "^Custom bottom"
     assert p.min_gap == 3
@@ -113,14 +114,14 @@ def test_invalid_regex_in_ui_pattern_skips_entry(
         {
             "$schema_version": 1,
             "ui_patterns": [
-                {"name": "Bad", "top": ["("], "bottom": ["ok"]},
-                {"name": "Good", "top": ["^ok$"], "bottom": ["^ok$"]},
+                {"name": "settings", "top": ["("], "bottom": ["ok"]},
+                {"name": "exit_plan_mode", "top": ["^ok$"], "bottom": ["^ok$"]},
             ],
         },
     )
     result = pc.load()
     names = [p.name for p in result.ui_patterns]
-    assert names == ["Good"]
+    assert names == [BlockedUI.EXIT_PLAN_MODE]
     assert any("ui_patterns[0]" in r.message for r in caplog.records)
 
 
@@ -130,13 +131,13 @@ def test_missing_required_field_skipped(isolated_ccmux_dir: Path) -> None:
         {
             "$schema_version": 1,
             "ui_patterns": [
-                {"name": "OnlyName"},  # missing top/bottom
-                {"name": "Good", "top": ["^x$"], "bottom": ["^y$"]},
+                {"name": "settings"},  # missing top/bottom
+                {"name": "exit_plan_mode", "top": ["^x$"], "bottom": ["^y$"]},
             ],
         },
     )
     result = pc.load()
-    assert [p.name for p in result.ui_patterns] == ["Good"]
+    assert [p.name for p in result.ui_patterns] == [BlockedUI.EXIT_PLAN_MODE]
 
 
 def test_non_single_char_spinner_rejected(isolated_ccmux_dir: Path) -> None:
@@ -212,7 +213,7 @@ def test_successful_load_emits_summary_info(
         {
             "$schema_version": 1,
             "ui_patterns": [
-                {"name": "BrandNewUI", "top": ["^x$"], "bottom": ["^y$"]},
+                {"name": "exit_plan_mode", "top": ["^x$"], "bottom": ["^y$"]},
             ],
             "skippable_overlays": ["^overlay"],
             "status_spinners": [],
@@ -250,13 +251,15 @@ def test_log_ui_pattern_shadows_emits_for_matching_name(
     caplog.set_level(logging.INFO, logger="ccmux.parser_config")
     import re
 
-    user = (UIPattern(name="ExitPlanMode", top=(re.compile("^x$"),), bottom=()),)
+    user = (
+        UIPattern(name=BlockedUI.EXIT_PLAN_MODE, top=(re.compile("^x$"),), bottom=()),
+    )
     builtin = [
-        UIPattern(name="ExitPlanMode", top=(re.compile("^y$"),), bottom=()),
+        UIPattern(name=BlockedUI.EXIT_PLAN_MODE, top=(re.compile("^y$"),), bottom=()),
     ]
     pc._log_ui_pattern_shadows(user, builtin)
     assert any(
-        "shadow" in r.message.lower() and "ExitPlanMode" in r.message
+        "shadow" in r.message.lower() and "exit_plan_mode" in r.message
         for r in caplog.records
     )
 
@@ -264,12 +267,15 @@ def test_log_ui_pattern_shadows_emits_for_matching_name(
 def test_log_ui_pattern_shadows_silent_for_new_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A user UIPattern whose name is not present in the supplied builtin list
+    must not trigger a shadow log — even though all BlockedUI members appear
+    in the full built-in set, the helper checks against whatever list is passed."""
     caplog.set_level(logging.INFO, logger="ccmux.parser_config")
     import re
 
-    user = (UIPattern(name="BrandNewUI", top=(re.compile("^x$"),), bottom=()),)
+    user = (UIPattern(name=BlockedUI.SETTINGS, top=(re.compile("^x$"),), bottom=()),)
     builtin = [
-        UIPattern(name="ExitPlanMode", top=(re.compile("^y$"),), bottom=()),
+        UIPattern(name=BlockedUI.EXIT_PLAN_MODE, top=(re.compile("^y$"),), bottom=()),
     ]
     pc._log_ui_pattern_shadows(user, builtin)
     shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
@@ -316,13 +322,13 @@ def test_shadow_ui_pattern_logs_info_on_reload(
         {
             "$schema_version": 1,
             "ui_patterns": [
-                {"name": "ExitPlanMode", "top": ["^x$"], "bottom": ["^y$"]},
+                {"name": "exit_plan_mode", "top": ["^x$"], "bottom": ["^y$"]},
             ],
         },
     )
     importlib.reload(pc)
     assert any(
-        "shadow" in r.message.lower() and "ExitPlanMode" in r.message
+        "shadow" in r.message.lower() and "exit_plan_mode" in r.message
         for r in caplog.records
     )
 
@@ -347,12 +353,16 @@ def test_shadow_simple_summary_field_logs_info_on_reload(
     )
 
 
-def test_no_shadow_no_info_log_on_reload(
+def test_invalid_ui_pattern_name_skipped_with_warning_on_reload(
     isolated_ccmux_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """An unrecognised name (not a valid BlockedUI value) is now rejected by
+    _parse_ui_patterns with a warning and skipped entirely — no shadow log,
+    no pattern loaded. All valid BlockedUI values shadow a built-in, so the
+    old "BrandNewUI → no shadow" premise no longer applies."""
     import importlib
 
-    caplog.set_level(logging.INFO, logger="ccmux.parser_config")
+    caplog.set_level(logging.WARNING, logger="ccmux.parser_config")
     _write_config(
         isolated_ccmux_dir,
         {
@@ -364,5 +374,8 @@ def test_no_shadow_no_info_log_on_reload(
         },
     )
     importlib.reload(pc)
+    # Invalid name → warning emitted, pattern skipped
+    assert any("ui_patterns[0]" in r.message for r in caplog.records)
+    # No shadow log because the pattern was not loaded
     shadow_records = [r for r in caplog.records if "shadow" in r.message.lower()]
     assert shadow_records == []
