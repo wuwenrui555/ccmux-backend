@@ -9,6 +9,35 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.5.0 — 2026-04-21
+
+### Changed (BREAKING)
+
+- `parse_status_line` returns raw TodoWrite rows, exactly as
+  rendered in the pane. The ASCII-bracket translation, `~~…~~`
+  strikethrough wrap, 2-space indent normalization, and 50-char
+  truncation that v2.4.0 baked into the parser are all removed.
+  Rows retain the original `⎿` elbow connector, CC-supplied
+  indentation, Unicode checkbox glyphs (`◻` / `◼` / `✔`), and the
+  indented `… +N pending[, M completed]` overflow tail verbatim.
+
+  Rationale: those transformations were Telegram-specific UX
+  decisions that leaked into `ccmux.api.Working.status_text`.
+  Splitting concerns: the parser extracts faithful pane content;
+  each frontend renders it to its own markup.
+
+  Migration for frontends that inlined v2.4.0's formatted output:
+  apply your own normalization (drop `⎿`, translate checkbox glyphs,
+  truncate for your message-size budget, wrap completed rows in
+  your renderer's strikethrough syntax). See `ccmux-telegram`
+  v2.2.0 for a reference implementation.
+
+### Removed
+
+- `_normalize_todo_row`, `_truncate_todo_row`, `_BRACKET_MAP`,
+  `_STRIKE_OPEN`/`_STRIKE_CLOSE`, and all related frontend-facing
+  constants. Unused after the parser stopped formatting.
+
 ## 2.4.0 — 2026-04-21
 
 ### Changed
