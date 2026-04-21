@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass
 
 from . import parser_config as _pc
+from .claude_state import BlockedUI
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,8 @@ drift_logger.propagate = False  # keep drift out of the main ccmux.log
 class InteractiveUIContent:
     """Content extracted from an interactive UI."""
 
-    content: str  # The extracted display content
-    name: str  # Pattern name that matched (e.g. "AskUserQuestion")
+    content: str
+    ui: BlockedUI
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +111,7 @@ def _try_extract(
         return None
 
     content = "\n".join(lines[top_idx : bottom_idx + 1]).rstrip()
-    return InteractiveUIContent(content=_shorten_separators(content), name=pattern.name)
+    return InteractiveUIContent(content=_shorten_separators(content), ui=pattern.name)
 
 
 # ---------------------------------------------------------------------------

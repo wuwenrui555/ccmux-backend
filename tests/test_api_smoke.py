@@ -194,8 +194,10 @@ class TestDataclassShapes:
         assert w.pane_current_command == ""
 
     def test_interactive_ui_content_fields(self) -> None:
-        ui = InteractiveUIContent(content="…", name="AskUserQuestion")
-        assert ui.name == "AskUserQuestion"
+        from ccmux.claude_state import BlockedUI
+
+        ui = InteractiveUIContent(content="…", ui=BlockedUI.ASK_USER_QUESTION)
+        assert ui.ui is BlockedUI.ASK_USER_QUESTION
 
     def test_usage_info_fields(self) -> None:
         u = UsageInfo(parsed_lines=["a", "b"])
