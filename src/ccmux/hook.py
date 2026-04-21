@@ -1,7 +1,7 @@
 """Hook subcommand for Claude Code session tracking.
 
 Called by Claude Code's SessionStart hook to maintain a window ↔ session
-mapping in <CCMUX_DIR>/window_bindings.json. Also provides `--install` to
+mapping in <CCMUX_DIR>/claude_instances.json. Also provides `--install` to
 auto-configure the hook in ~/.claude/settings.json.
 
 This module deliberately avoids importing `config.py` so the hook stays
@@ -314,7 +314,7 @@ def hook_main() -> None:
     Two modes:
     - `ccmux hook --install`: install the hook into `~/.claude/settings.json`
     - `ccmux hook`: read a SessionStart event from stdin and update
-      `window_bindings.json` with the tmux session → window_id + session_id mapping
+      `claude_instances.json` with the tmux session → window_id + session_id mapping
     """
     _configure_hook_logging()
     try:
