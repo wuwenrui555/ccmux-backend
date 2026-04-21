@@ -18,7 +18,7 @@ from .claude_instance import ClaudeInstanceRegistry, ClaudeSession
 from .claude_transcript_parser import TranscriptParser
 
 if TYPE_CHECKING:
-    from .claude_instance import ClaudeInstance
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -135,22 +135,3 @@ class ClaudeFileResolver:
             }
             for e in parsed
         ]
-
-    async def read_messages_by_instance(
-        self,
-        instance: "ClaudeInstance",
-        *,
-        start_byte: int = 0,
-        end_byte: int | None = None,
-    ) -> list[dict]:
-        if not instance.session_id:
-            return []
-        file_path = await self.find_file(instance.session_id, instance.cwd)
-        if not file_path:
-            return []
-        return await self.read_messages(
-            file_path,
-            instance.session_id,
-            start_byte=start_byte,
-            end_byte=end_byte,
-        )

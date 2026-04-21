@@ -144,7 +144,21 @@ class _ClaudeOpsImpl:
 
 
 class DefaultBackend:
-    """Default tmux-backed Backend."""
+    """Default tmux-backed Backend.
+
+    Owns the fast and slow poll tasks and the auto-resume coordinator.
+    StateMonitor (fast tick: pane classification; slow tick: process
+    probe) reports every ClaudeState observation to
+    ``on_state_with_resume``, which fans out to the caller's ``on_state``
+    first (so the UI reflects Dead before any recovery runs) and then
+    attempts ``claude --resume`` in the same tmux session when the
+    observed state is Dead. Re-entry during an in-flight resume is
+    suppressed by ``self._resuming``.
+
+    MessageMonitor runs on the fast tick alongside StateMonitor; each
+    new JSONL line is paired with its ``instance_id`` and handed to the
+    caller's ``on_message``.
+    """
 
     def __init__(
         self,
@@ -164,6 +178,7 @@ class DefaultBackend:
         self._slow_interval = slow_interval
         self._fast_task: asyncio.Task[None] | None = None
         self._slow_task: asyncio.Task[None] | None = None
+        self._resuming: set[str] = set()
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
@@ -260,24 +275,31 @@ class DefaultBackend:
     # --- Auto-resume -------------------------------------------------
 
     async def _try_resume(self, instance_id: str) -> None:
-        inst = self._registry.get(instance_id)
-        if inst is None:
+        if instance_id in self._resuming:
+            logger.debug("resume already in flight for %s; skipping", instance_id)
             return
-        cwd = inst.cwd or str(Path.home())
-        logger.info(
-            "Attempting to resume Claude session %s in instance %s (cwd=%s)",
-            inst.session_id,
-            instance_id,
-            cwd,
-        )
-        tm = self._tmux_registry.get_or_create(instance_id)
-        ok, msg, _, new_wid = await tm.create_window(
-            work_dir=cwd, resume_session_id=inst.session_id
-        )
-        if ok:
-            logger.info("Resumed %s in window %s", inst.session_id, new_wid)
-        else:
-            logger.warning("Failed to resume %s: %s", inst.session_id, msg)
+        self._resuming.add(instance_id)
+        try:
+            inst = self._registry.get(instance_id)
+            if inst is None:
+                return
+            cwd = inst.cwd or str(Path.home())
+            logger.info(
+                "Attempting to resume Claude session %s in instance %s (cwd=%s)",
+                inst.session_id,
+                instance_id,
+                cwd,
+            )
+            tm = self._tmux_registry.get_or_create(instance_id)
+            ok, msg, _, new_wid = await tm.create_window(
+                work_dir=cwd, resume_session_id=inst.session_id
+            )
+            if ok:
+                logger.info("Resumed %s in window %s", inst.session_id, new_wid)
+            else:
+                logger.warning("Failed to resume %s: %s", inst.session_id, msg)
+        finally:
+            self._resuming.discard(instance_id)
 
 
 # --- Module-level default singleton --------------------------------------
@@ -293,6 +315,6 @@ def get_default_backend() -> Backend:
     return _default_backend
 
 
-def set_default_backend(backend: Backend) -> None:
+def set_default_backend(backend: Backend | None) -> None:
     global _default_backend
     _default_backend = backend
