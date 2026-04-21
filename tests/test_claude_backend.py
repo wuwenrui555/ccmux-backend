@@ -1,9 +1,9 @@
 """Smoke test: backend.start dispatches monitor events to the on_message callback.
 
-Stubs MessageMonitor + StatusMonitor so one poll cycle deterministically
-yields one ClaudeMessage and no WindowStatus, and verifies the callbacks
-are invoked.  Also confirms backend.stop cancels the internal tasks
-cleanly with no leaked pending tasks.
+Stubs MessageMonitor + StateMonitor so one poll cycle deterministically
+yields one (instance_id, ClaudeMessage) pair and no state observations,
+and verifies the callbacks are invoked.  Also confirms backend.stop
+cancels the internal tasks cleanly with no leaked pending tasks.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ccmux.backend import DefaultBackend
+from ccmux.claude_instance import ClaudeInstance
 from ccmux.claude_transcript_parser import ClaudeMessage
 
 
@@ -29,36 +30,34 @@ async def test_backend_start_dispatches_on_message():
 
     message_monitor = MagicMock()
     message_monitor.startup_cleanup = MagicMock()
-    message_monitor.poll = AsyncMock(side_effect=[[stub_message], []])
+    message_monitor.poll = AsyncMock(side_effect=[[("alpha", stub_message)], []])
     message_monitor.shutdown = MagicMock()
 
-    status_monitor = MagicMock()
-    status_monitor.poll = AsyncMock(return_value=[])
-
+    tmux_registry = MagicMock()
     registry = MagicMock()
-    windows = MagicMock()
-    windows.load = AsyncMock()
-    windows.verify_all = AsyncMock()
+    registry.load = AsyncMock()
+    # StateMonitor iterates registry.all(); we don't want any state emissions
+    # in this smoke test.
+    registry.all = MagicMock(return_value=iter([]))
 
     backend = DefaultBackend(
-        tmux_registry=registry,
-        window_bindings=windows,
+        tmux_registry=tmux_registry,
+        registry=registry,
         message_monitor=message_monitor,
-        status_monitor=status_monitor,
         slow_interval=3600.0,
     )
 
+    on_state = AsyncMock()
     on_message = AsyncMock()
-    on_status = AsyncMock()
 
-    await backend.start(on_message=on_message, on_status=on_status)
+    await backend.start(on_state=on_state, on_message=on_message)
 
     # Let one fast-poll cycle run.
     await asyncio.sleep(0.6)
 
     await backend.stop()
 
-    on_message.assert_any_await(stub_message)
+    on_message.assert_any_await("alpha", stub_message)
     message_monitor.startup_cleanup.assert_called_once()
     message_monitor.shutdown.assert_called_once()
     assert backend._fast_task is None
@@ -66,37 +65,22 @@ async def test_backend_start_dispatches_on_message():
 
 
 @pytest.mark.asyncio
-async def test_backend_get_window_binding_delegates_to_registry():
-    """get_window_binding just passes through to WindowBindings.get."""
-    from ccmux.window_bindings import WindowBinding
-
+async def test_backend_get_instance_delegates_to_registry():
+    """get_instance just passes through to ClaudeInstanceRegistry.get."""
+    tmux_registry = MagicMock()
     registry = MagicMock()
-    windows = MagicMock()
-    windows.load = AsyncMock()
-    windows.verify_all = AsyncMock()
-    expected = WindowBinding(
-        window_id="@5", session_name="proj", claude_session_id="uuid", cwd="/tmp"
+    registry.load = AsyncMock()
+    expected = ClaudeInstance(
+        instance_id="proj", window_id="@5", session_id="uuid", cwd="/tmp"
     )
-    windows.get = MagicMock(return_value=expected)
+    registry.get = MagicMock(return_value=expected)
 
-    backend = DefaultBackend(tmux_registry=registry, window_bindings=windows)
+    backend = DefaultBackend(tmux_registry=tmux_registry, registry=registry)
 
-    result = backend.get_window_binding("@5")
+    result = backend.get_instance("proj")
 
     assert result is expected
-    windows.get.assert_called_once_with("@5")
-
-
-@pytest.mark.asyncio
-async def test_backend_is_alive_delegates_to_liveness():
-    """is_alive proxies to LivenessChecker.is_alive (pure backend query)."""
-    session_map = MagicMock()
-    backend = DefaultBackend(tmux_registry=MagicMock(), window_bindings=session_map)
-    backend._liveness = MagicMock()
-    backend._liveness.is_alive = MagicMock(return_value=True)
-
-    assert backend.is_alive("@9") is True
-    backend._liveness.is_alive.assert_called_once_with("@9")
+    registry.get.assert_called_once_with("proj")
 
 
 @pytest.mark.asyncio
@@ -111,12 +95,10 @@ async def test_backend_send_text_delegates_to_registry():
     mock_registry = MagicMock()
     mock_registry.get_by_window_id.return_value = mock_tm
 
-    windows = MagicMock()
-    windows.load = AsyncMock()
-    windows.verify_all = AsyncMock()
-    windows.files = MagicMock()
+    instance_registry = MagicMock()
+    instance_registry.load = AsyncMock()
 
-    backend = DefaultBackend(tmux_registry=mock_registry, window_bindings=windows)
+    backend = DefaultBackend(tmux_registry=mock_registry, registry=instance_registry)
 
     ok, msg = await backend.tmux.send_text("@3", "hello")
 
@@ -128,6 +110,7 @@ async def test_backend_send_text_delegates_to_registry():
 async def test_fake_backend_satisfies_protocol():
     """FakeBackend conforms to the Backend structural Protocol."""
     from ccmux.backend import Backend
+    from ccmux.claude_state import Idle
 
     from tests.fake_backend import FakeBackend
 
@@ -135,16 +118,19 @@ async def test_fake_backend_satisfies_protocol():
     # Static Protocol check: assign to the Protocol type.
     _: Backend = fake  # noqa: F841
 
-    on_msg = AsyncMock()
-    on_status = AsyncMock()
-    await fake.start(on_msg, on_status)
+    on_state = AsyncMock()
+    on_message = AsyncMock()
+    await fake.start(on_state, on_message)
     assert fake.started is True
 
     stub = ClaudeMessage(
         session_id="x", role="assistant", content_type="text", text="hi"
     )
-    await fake.emit_message(stub)
-    on_msg.assert_awaited_once_with(stub)
+    await fake.emit_message("alpha", stub)
+    on_message.assert_awaited_once_with("alpha", stub)
+
+    await fake.emit_state("alpha", Idle())
+    on_state.assert_awaited_once_with("alpha", Idle())
 
     await fake.stop()
     assert fake.stopped is True

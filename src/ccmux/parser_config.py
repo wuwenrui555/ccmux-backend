@@ -23,6 +23,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .claude_state import BlockedUI
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class UIPattern:
     starts a region that closes at the first matching bottom anchor.
     """
 
-    name: str
+    name: BlockedUI
     top: tuple[re.Pattern[str], ...]
     bottom: tuple[re.Pattern[str], ...]
     min_gap: int = 2
@@ -65,7 +66,7 @@ class ParserOverrides:
 
 _BUILTIN_UI_PATTERNS: list[UIPattern] = [
     UIPattern(
-        name="ExitPlanMode",
+        name=BlockedUI.EXIT_PLAN_MODE,
         top=(
             re.compile(r"^\s*Would you like to proceed\?"),
             # v2.1.29+: longer prefix that may wrap across lines
@@ -77,19 +78,19 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
         ),
     ),
     UIPattern(
-        name="AskUserQuestion",
+        name=BlockedUI.ASK_USER_QUESTION,
         top=(re.compile(r"^\s*←\s+[☐✔☒]"),),  # Multi-tab: no bottom needed
         bottom=(),
         min_gap=1,
     ),
     UIPattern(
-        name="AskUserQuestion",
+        name=BlockedUI.ASK_USER_QUESTION,
         top=(re.compile(r"^\s*[☐✔☒]"),),  # Single-tab: bottom required
         bottom=(re.compile(r"^\s*Enter to select"),),
         min_gap=1,
     ),
     UIPattern(
-        name="PermissionPrompt",
+        name=BlockedUI.PERMISSION_PROMPT,
         top=(
             re.compile(r"^\s*Do you want to proceed\?"),
             re.compile(r"^\s*Do you want to make this edit"),
@@ -100,14 +101,14 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
     ),
     UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)
-        name="PermissionPrompt",
+        name=BlockedUI.PERMISSION_PROMPT,
         top=(re.compile(r"^\s*❯\s*1\.\s*Yes"),),
         bottom=(),
         min_gap=2,
     ),
     UIPattern(
         # Bash command approval
-        name="BashApproval",
+        name=BlockedUI.BASH_APPROVAL,
         top=(
             re.compile(r"^\s*Bash command\s*$"),
             re.compile(r"^\s*This command requires approval"),
@@ -115,12 +116,12 @@ _BUILTIN_UI_PATTERNS: list[UIPattern] = [
         bottom=(re.compile(r"^\s*Esc to cancel"),),
     ),
     UIPattern(
-        name="RestoreCheckpoint",
+        name=BlockedUI.RESTORE_CHECKPOINT,
         top=(re.compile(r"^\s*Restore the code"),),
         bottom=(re.compile(r"^\s*Enter to continue"),),
     ),
     UIPattern(
-        name="Settings",
+        name=BlockedUI.SETTINGS,
         top=(
             # CC 2.1.x+ /config UI: tab bar replaces the old "Settings:" header.
             # Active tab highlighting is invisible in plain pane capture — we
@@ -155,6 +156,12 @@ _BUILTIN_SKIPPABLE_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
 # is in this set are treated the same as blanks and overlays: skipped without
 # bailing and without consuming the bail-budget. This lets the spinner be found
 # above arbitrarily long task lists (subagent runs, multi-step plans).
+#
+# `⎿` is intentionally NOT in this set — it's Claude's generic tree-elbow
+# and appears on every Bash/tool result line (`  ⎿  Installed 1 package`).
+# Treating it as a free skip would let the upward scan cross tool-output
+# blocks and return a stale spinner from scrollback. The checklist-specific
+# form `⎿  <checkbox>` is handled separately in `parse_status_line`.
 _BUILTIN_STATUS_SKIP_GLYPHS: frozenset[str] = frozenset(["◼", "◻", "☐", "☒", "✔", "✓"])
 
 # One-field tools: tool name -> input dict key to surface as summary.
@@ -193,11 +200,15 @@ def _parse_ui_patterns(raw: object) -> tuple[UIPattern, ...]:
         try:
             if not isinstance(entry, dict):
                 raise TypeError("entry is not a JSON object")
-            name = entry.get("name")
+            name_src = entry.get("name")
             top_src = entry.get("top")
             bottom_src = entry.get("bottom")
-            if not isinstance(name, str):
+            if not isinstance(name_src, str):
                 raise KeyError("name")
+            try:
+                name = BlockedUI(name_src)
+            except ValueError as e:
+                raise KeyError(f"name {name_src!r} is not a valid BlockedUI") from e
             if not isinstance(top_src, list):
                 raise KeyError("top")
             if not isinstance(bottom_src, list):

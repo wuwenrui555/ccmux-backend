@@ -2,6 +2,7 @@
 
 import pytest
 
+from ccmux.claude_state import BlockedUI
 from ccmux.tmux_pane_parser import (
     extract_bash_output,
     extract_interactive_content,
@@ -129,6 +130,46 @@ class TestParseStatusLine:
             parse_status_line(pane) == "Exploring project context… (2m · ↑ 1.3k tokens)"
         )
 
+    def test_skips_through_elbow_connector_on_first_task(self, chrome: str):
+        """First checklist row uses the `⎿` elbow to connect to the spinner
+        line above (`  ⎿  ◼ First task`). The upward scan must treat this
+        compound elbow-plus-checkbox form as skippable — otherwise it bails
+        on the elbow and the spinner is never reached."""
+        pane = (
+            "some output\n"
+            "· Auditing WindowStatus / PaneState usage… (1m 6s · thinking)\n"
+            "  ⎿  ◼ Audit current WindowStatus / PaneState usage\n"
+            "     ◻ Clarify refactor scope with user\n"
+            "     ◻ Propose refactor approaches\n"
+            "     ◻ Write design doc and gate on user review\n"
+            "\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane)
+            == "Auditing WindowStatus / PaneState usage… (1m 6s · thinking)"
+        )
+
+    def test_lone_elbow_tool_output_still_bails(self, chrome: str):
+        """A plain `⎿  text` line is generic tool output (Bash result,
+        Read summary, etc.), not a checklist elbow. The scan must bail
+        on it — otherwise it walks through scrollback and can return a
+        stale spinner from a prior turn."""
+        pane = (
+            "✽ Stale spinner from earlier turn…\n"
+            "● Bash(uv run pytest -q)\n"
+            "  ⎿  262 passed, 1 warning in 1.28s\n"
+            "  ⎿  Installed 1 package in 10ms\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) is None
+
+    def test_elbow_with_non_checkbox_content_still_bails(self, chrome: str):
+        """`⎿` followed by text (not a checkbox glyph) is tool output,
+        not a checklist elbow — scan must bail."""
+        pane = f"✽ Very old spinner…\n  ⎿  Read 3 lines\n{chrome}"
+        assert parse_status_line(pane) is None
+
     def test_skips_through_long_task_checklist(self, chrome: str):
         """A checklist larger than the legacy 10-line scan window still
         finds the spinner — checklist lines are free-skip, not counted."""
@@ -181,7 +222,7 @@ class TestExtractInteractiveContent:
     def test_exit_plan_mode(self, sample_pane_exit_plan: str):
         result = extract_interactive_content(sample_pane_exit_plan)
         assert result is not None
-        assert result.name == "ExitPlanMode"
+        assert result.ui is BlockedUI.EXIT_PLAN_MODE
         assert "Would you like to proceed?" in result.content
         assert "ctrl-g to edit in" in result.content
 
@@ -191,25 +232,25 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "ExitPlanMode"
+        assert result.ui is BlockedUI.EXIT_PLAN_MODE
         assert "Claude has written up a plan" in result.content
 
     def test_ask_user_multi_tab(self, sample_pane_ask_user_multi_tab: str):
         result = extract_interactive_content(sample_pane_ask_user_multi_tab)
         assert result is not None
-        assert result.name == "AskUserQuestion"
+        assert result.ui is BlockedUI.ASK_USER_QUESTION
         assert "←" in result.content
 
     def test_ask_user_single_tab(self, sample_pane_ask_user_single_tab: str):
         result = extract_interactive_content(sample_pane_ask_user_single_tab)
         assert result is not None
-        assert result.name == "AskUserQuestion"
+        assert result.ui is BlockedUI.ASK_USER_QUESTION
         assert "Enter to select" in result.content
 
     def test_permission_prompt(self, sample_pane_permission: str):
         result = extract_interactive_content(sample_pane_permission)
         assert result is not None
-        assert result.name == "PermissionPrompt"
+        assert result.ui is BlockedUI.PERMISSION_PROMPT
         assert "Do you want to proceed?" in result.content
 
     def test_restore_checkpoint(self):
@@ -221,20 +262,20 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "RestoreCheckpoint"
+        assert result.ui is BlockedUI.RESTORE_CHECKPOINT
         assert "Restore the code" in result.content
 
     def test_settings(self):
         pane = "  Settings: press tab to cycle\n  ─────\n  Option 1\n  Esc to cancel\n"
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "Settings"
+        assert result.ui is BlockedUI.SETTINGS
         assert "Settings:" in result.content
 
     def test_settings_model_picker(self, sample_pane_settings: str):
         result = extract_interactive_content(sample_pane_settings)
         assert result is not None
-        assert result.name == "Settings"
+        assert result.ui is BlockedUI.SETTINGS
         assert "Select model" in result.content
         assert "Sonnet" in result.content
         assert "Enter to confirm" in result.content
@@ -251,7 +292,7 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "Settings"
+        assert result.ui is BlockedUI.SETTINGS
         assert "Esc to cancel" in result.content
 
     def test_settings_esc_to_exit_bottom(self):
@@ -267,7 +308,7 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "Settings"
+        assert result.ui is BlockedUI.SETTINGS
         assert "Enter to confirm" in result.content
 
     def test_settings_new_config_ui(self):
@@ -286,7 +327,7 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "Settings"
+        assert result.ui is BlockedUI.SETTINGS
         assert "Auto-compact" in result.content
         assert "Config" in result.content
 
@@ -304,7 +345,7 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "Settings"
+        assert result.ui is BlockedUI.SETTINGS
         assert "Current session" in result.content
 
     @pytest.mark.parametrize(
@@ -390,7 +431,7 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "AskUserQuestion"
+        assert result.ui is BlockedUI.ASK_USER_QUESTION
         assert "蓝色" in result.content
 
     def test_permission_prompt_realistic_pane_matches(self):
@@ -413,8 +454,18 @@ class TestExtractInteractiveContent:
         )
         result = extract_interactive_content(pane)
         assert result is not None
-        assert result.name == "PermissionPrompt"
+        assert result.ui is BlockedUI.PERMISSION_PROMPT
         assert "Do you want to proceed?" in result.content
+
+
+class TestInteractiveUIContentShape:
+    def test_ui_field_is_BlockedUI_enum(self, sample_pane_permission: str) -> None:
+        """extract_interactive_content returns `ui: BlockedUI`, not `name: str`."""
+        result = extract_interactive_content(sample_pane_permission)
+        assert result is not None
+        assert isinstance(result.ui, BlockedUI)
+        assert result.ui is BlockedUI.PERMISSION_PROMPT
+        assert isinstance(result.content, str)
 
 
 class TestHasInputChrome:
@@ -729,7 +780,7 @@ def test_user_ui_pattern_is_prepended_and_matches_first(monkeypatch, tmp_path) -
                 "$schema_version": 1,
                 "ui_patterns": [
                     {
-                        "name": "ExitPlanMode",
+                        "name": "exit_plan_mode",
                         "top": ["^CUSTOM TOP$"],
                         "bottom": ["^CUSTOM BOTTOM$"],
                     }
@@ -743,8 +794,8 @@ def test_user_ui_pattern_is_prepended_and_matches_first(monkeypatch, tmp_path) -
     importlib.reload(parser_config)
 
     names = [p.name for p in parser_config.UI_PATTERNS]
-    assert names[0] == "ExitPlanMode"
-    # 2 ExitPlanMode (user-prepended) + however many built-in share that name.
+    assert names[0] is BlockedUI.EXIT_PLAN_MODE
+    # 2 EXIT_PLAN_MODE (user-prepended) + however many built-in share that name.
     # At least 2; exact count depends on whether built-in has variants.
-    assert names.count("ExitPlanMode") >= 2
+    assert names.count(BlockedUI.EXIT_PLAN_MODE) >= 2
     assert parser_config.UI_PATTERNS[0].top[0].pattern == "^CUSTOM TOP$"

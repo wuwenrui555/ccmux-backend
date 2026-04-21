@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass
 
 from . import parser_config as _pc
+from .claude_state import BlockedUI
 from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,8 @@ drift_logger.propagate = False  # keep drift out of the main ccmux.log
 class InteractiveUIContent:
     """Content extracted from an interactive UI."""
 
-    content: str  # The extracted display content
-    name: str  # Pattern name that matched (e.g. "AskUserQuestion")
+    content: str
+    ui: BlockedUI
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +111,7 @@ def _try_extract(
         return None
 
     content = "\n".join(lines[top_idx : bottom_idx + 1]).rstrip()
-    return InteractiveUIContent(content=_shorten_separators(content), name=pattern.name)
+    return InteractiveUIContent(content=_shorten_separators(content), ui=pattern.name)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +252,10 @@ def _has_input_chrome(lines: list[str]) -> bool:
     return False
 
 
+# Public alias — callers outside this module should use this.
+has_input_chrome = _has_input_chrome
+
+
 # ---------------------------------------------------------------------------
 # Chrome detection
 # ---------------------------------------------------------------------------
@@ -374,6 +379,15 @@ def parse_status_line(pane_text: str) -> str | None:
             continue
         if stripped[0] in _pc.STATUS_SKIP_GLYPHS:
             continue
+        # Checklist elbow: first TodoWrite row is rendered as
+        # `  ⎿  ◼ First task`, connecting the sub-list to the spinner
+        # above. Skip only this compound form — a lone `⎿  text` is
+        # generic tool output (`⎿  Installed 1 package`) and must still
+        # bail, otherwise the scan walks through scrollback.
+        if stripped[0] == "⎿":
+            after_elbow = stripped[1:].lstrip()
+            if after_elbow and after_elbow[0] in _pc.STATUS_SKIP_GLYPHS:
+                continue
         if any(p.search(line) for p in _pc.SKIPPABLE_OVERLAY_PATTERNS):
             continue
         if stripped[0] in _pc.STATUS_SPINNERS:

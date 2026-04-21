@@ -2,7 +2,7 @@
 
 Verifies every symbol in `__all__` is importable and callable; also
 covers the Protocol contract via FakeBackend and DefaultBackend's
-lifecycle. Guards against accidental API breakage at v1.0+.
+lifecycle. Guards against accidental API breakage at v2.0.0+.
 """
 
 from __future__ import annotations
@@ -12,17 +12,17 @@ import pytest
 import ccmux.api as api
 from ccmux.api import (
     Backend,
+    ClaudeInstance,
+    ClaudeInstanceRegistry,
     ClaudeMessage,
     ClaudeSession,
+    ClaudeState,
     DefaultBackend,
     InteractiveUIContent,
     TmuxSessionRegistry,
     TmuxWindow,
     TranscriptParser,
     UsageInfo,
-    WindowBinding,
-    WindowBindings,
-    WindowStatus,
     extract_bash_output,
     extract_interactive_content,
     get_default_backend,
@@ -36,8 +36,52 @@ from ccmux.api import (
 from tests.fake_backend import FakeBackend
 
 
+EXPECTED_EXPORTS = {
+    # Protocol + lifecycle
+    "Backend",
+    "TmuxOps",
+    "ClaudeOps",
+    "DefaultBackend",
+    "get_default_backend",
+    "set_default_backend",
+    # State family
+    "ClaudeState",
+    "Working",
+    "Idle",
+    "Blocked",
+    "Dead",
+    "BlockedUI",
+    # Message / transcript
+    "ClaudeMessage",
+    "TranscriptParser",
+    # Instance model
+    "ClaudeInstance",
+    "ClaudeInstanceRegistry",
+    "ClaudeSession",
+    # Composition inputs
+    "TmuxSessionRegistry",
+    # Parser surfaces
+    "InteractiveUIContent",
+    "UsageInfo",
+    "extract_bash_output",
+    "extract_interactive_content",
+    "parse_status_line",
+    "parse_usage_output",
+    # Query types
+    "TmuxWindow",
+    # Composition helpers
+    "tmux_registry",
+    "sanitize_session_name",
+}
+
+
 class TestApiSurface:
     """Every name in __all__ must exist on the module and round-trip import."""
+
+    def test_api_exports_match_expected_set(self) -> None:
+        assert set(api.__all__) == EXPECTED_EXPORTS
+        for name in EXPECTED_EXPORTS:
+            assert hasattr(api, name), f"api missing {name!r}"
 
     def test_all_attribute_populated(self) -> None:
         assert len(api.__all__) >= 18
@@ -45,11 +89,6 @@ class TestApiSurface:
     def test_every_export_is_resolvable(self) -> None:
         missing = [name for name in api.__all__ if not hasattr(api, name)]
         assert missing == [], f"Missing __all__ exports: {missing}"
-
-    def test_registry_and_bindings_are_distinct_types(self) -> None:
-        # Catches a regression where the two composition inputs collapsed
-        # into a single name.
-        assert TmuxSessionRegistry is not WindowBindings
 
     def test_tmux_registry_singleton_is_TmuxSessionRegistry(self) -> None:
         assert isinstance(tmux_registry, TmuxSessionRegistry)
@@ -60,16 +99,24 @@ class TestFakeBackendSatisfiesProtocol:
 
     def test_fake_has_all_protocol_attrs(self) -> None:
         fake = FakeBackend()
-        assert hasattr(fake, "tmux")
-        assert hasattr(fake, "claude")
-        assert callable(fake.is_alive)
-        assert callable(fake.get_window_binding)
+        # get_instance replaces old is_alive / get_window_binding
+        assert callable(fake.get_instance)
+        # tmux sub-protocol: 5 ops
+        assert callable(fake.tmux.send_text)
+        assert callable(fake.tmux.send_keys)
+        assert callable(fake.tmux.capture_pane)
+        assert callable(fake.tmux.create_window)
+        assert callable(fake.tmux.list_windows)
+        # claude sub-protocol: 2 ops
+        assert callable(fake.claude.list_sessions)
+        assert callable(fake.claude.get_history)
+        # lifecycle
         assert callable(fake.start)
         assert callable(fake.stop)
 
     def test_fake_assignable_to_Backend_annotation(self) -> None:
         # Protocol checks are structural; this asserts Backend is a proper
-        # Protocol (not a concrete class) by confirming DefaultBackend
+        # Protocol (not a concrete class) by confirming FakeBackend
         # without inheriting it still satisfies it.
         fake: Backend = FakeBackend()
         assert fake is not None
@@ -77,18 +124,27 @@ class TestFakeBackendSatisfiesProtocol:
 
 class TestDefaultBackendConstruction:
     def test_construct_minimal(self, tmp_path) -> None:
-        bindings = WindowBindings(map_file=tmp_path / "window_bindings.json")
         reg = TmuxSessionRegistry()
-        backend = DefaultBackend(tmux_registry=reg, window_bindings=bindings)
+        registry = ClaudeInstanceRegistry(map_file=tmp_path / "claude_instances.json")
+        backend = DefaultBackend(tmux_registry=reg, registry=registry)
         assert backend.tmux is not None
         assert backend.claude is not None
 
     @pytest.mark.asyncio
     async def test_start_stop_idempotent_on_stop(self, tmp_path) -> None:
-        bindings = WindowBindings(map_file=tmp_path / "window_bindings.json")
         reg = TmuxSessionRegistry()
-        backend = DefaultBackend(tmux_registry=reg, window_bindings=bindings)
-        # stop() before start() is a no-op; must not raise.
+        registry = ClaudeInstanceRegistry(map_file=tmp_path / "claude_instances.json")
+        backend = DefaultBackend(tmux_registry=reg, registry=registry)
+
+        async def noop_state(instance_id: str, state: ClaudeState) -> None:
+            pass
+
+        async def noop_message(instance_id: str, msg: ClaudeMessage) -> None:
+            pass
+
+        await backend.start(on_state=noop_state, on_message=noop_message)
+        await backend.stop()
+        # Second stop must not raise
         await backend.stop()
 
 
@@ -167,22 +223,6 @@ class TestDataclassShapes:
         )
         assert msg.tool_name is None and msg.is_complete is False
 
-    def test_window_status_fields(self) -> None:
-        s = WindowStatus(
-            window_id="@1",
-            window_exists=True,
-            pane_captured=False,
-            status_text=None,
-            interactive_ui=None,
-        )
-        assert s.window_id == "@1"
-
-    def test_window_binding_fields(self) -> None:
-        b = WindowBinding(
-            window_id="@1", session_name="s", claude_session_id="sid", cwd="/tmp"
-        )
-        assert b.cwd == "/tmp"
-
     def test_claude_session_fields(self) -> None:
         cs = ClaudeSession(
             session_id="sid", summary="x", message_count=3, file_path="/p"
@@ -194,9 +234,17 @@ class TestDataclassShapes:
         assert w.pane_current_command == ""
 
     def test_interactive_ui_content_fields(self) -> None:
-        ui = InteractiveUIContent(content="…", name="AskUserQuestion")
-        assert ui.name == "AskUserQuestion"
+        from ccmux.claude_state import BlockedUI
+
+        ui = InteractiveUIContent(content="…", ui=BlockedUI.ASK_USER_QUESTION)
+        assert ui.ui is BlockedUI.ASK_USER_QUESTION
 
     def test_usage_info_fields(self) -> None:
         u = UsageInfo(parsed_lines=["a", "b"])
         assert u.parsed_lines == ["a", "b"]
+
+    def test_claude_instance_fields(self) -> None:
+        inst = ClaudeInstance(
+            instance_id="inst1", window_id="@1", session_id="sid", cwd="/tmp"
+        )
+        assert inst.cwd == "/tmp"
