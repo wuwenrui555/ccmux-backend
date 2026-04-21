@@ -447,19 +447,38 @@ def _hook_main_impl() -> None:
                             "Failed to read existing session_map, starting fresh"
                         )
 
-                # Guard: if this session already has a different window,
-                # a second Claude was opened in the same tmux session.
-                # Skip to avoid overwriting the existing entry.
+                # Guard: if this session already has a DIFFERENT window
+                # AND a different session_id, a second Claude was opened
+                # in the same tmux session. Reject to avoid overwriting.
+                #
+                # When the session_id matches, the new window is the same
+                # Claude session resuming in a new tmux window (typical
+                # after `_try_resume`): allow the overwrite so the registry
+                # tracks the live window instead of the dead one. Without
+                # this path, StateMonitor keeps polling the dead window,
+                # keeps emitting Dead, and auto-resume runs in a loop,
+                # creating a new tmux window on every tick.
                 existing = session_map.get(tmux_session_name)
                 if existing and existing.get("window_id") != window_id:
-                    logger.warning(
-                        "Session '%s' already has window %s, refusing to "
-                        "overwrite with %s. Only one Claude per tmux session.",
+                    if existing.get("session_id") != session_id:
+                        logger.warning(
+                            "Session '%s' already has window %s (session_id=%s), "
+                            "refusing to overwrite with window %s (session_id=%s). "
+                            "Only one Claude per tmux session.",
+                            tmux_session_name,
+                            existing.get("window_id"),
+                            existing.get("session_id"),
+                            window_id,
+                            session_id,
+                        )
+                        return
+                    logger.info(
+                        "Session '%s' resumed: window %s -> %s (session_id %s)",
                         tmux_session_name,
                         existing.get("window_id"),
                         window_id,
+                        session_id,
                     )
-                    return
 
                 session_map[tmux_session_name] = {
                     "window_id": window_id,

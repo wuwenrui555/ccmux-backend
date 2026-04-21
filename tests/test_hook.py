@@ -284,6 +284,46 @@ class TestHookSessionMapWrite:
         assert data["aclf"]["window_id"] == "@4"
         assert data["aclf"]["session_id"] == "aaaa0000-0000-0000-0000-000000000000"
 
+    def test_same_session_resume_updates_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Resume of the same session in a new tmux window overwrites.
+
+        `_try_resume` opens a fresh tmux window running
+        ``claude --resume <session_id>``. The SessionStart hook then
+        fires with the original session_id but a new window_id. The
+        registry must follow the live window; otherwise StateMonitor
+        keeps polling the dead window, emits Dead forever, and
+        auto-resume runs in a loop.
+        """
+        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+
+        session_id = "cccc0000-0000-0000-0000-000000000000"
+
+        self._run_hook(
+            monkeypatch,
+            {
+                "session_id": session_id,
+                "cwd": "/tmp",
+                "hook_event_name": "SessionStart",
+            },
+            "test:@242\n",
+        )
+
+        self._run_hook(
+            monkeypatch,
+            {
+                "session_id": session_id,  # same session, different window
+                "cwd": "/tmp",
+                "hook_event_name": "SessionStart",
+            },
+            "test:@379\n",
+        )
+
+        data = json.loads((tmp_path / "claude_instances.json").read_text())
+        assert data["test"]["window_id"] == "@379"
+        assert data["test"]["session_id"] == session_id
+
 
 class TestHookFileLogging:
     """hook.log in CCMUX_DIR captures invocations + unhandled exceptions."""
