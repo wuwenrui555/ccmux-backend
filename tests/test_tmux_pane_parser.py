@@ -117,7 +117,8 @@ class TestParseStatusLine:
 
     def test_skips_through_task_checklist(self, chrome: str):
         """TodoWrite checklist between spinner and chrome must not bail;
-        task rows are collected and appended to the spinner text."""
+        task rows are collected, normalized to ASCII brackets, and
+        appended to the spinner text."""
         pane = (
             "some output\n"
             "✶ Exploring project context… (2m · ↑ 1.3k tokens)\n"
@@ -129,9 +130,9 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Exploring project context… (2m · ↑ 1.3k tokens)\n"
-            "  ◼ Explore ccmux-telegram project context\n"
-            "  ◻ Ask clarifying questions on both UX issues\n"
-            "  ◻ Propose approaches"
+            "  [>] Explore ccmux-telegram project context\n"
+            "  [ ] Ask clarifying questions on both UX issues\n"
+            "  [ ] Propose approaches"
         )
 
     def test_skips_through_elbow_connector_on_first_task(self, chrome: str):
@@ -139,7 +140,8 @@ class TestParseStatusLine:
         line above (`  ⎿  ◼ First task`). The upward scan must treat this
         compound elbow-plus-checkbox form as skippable — otherwise it bails
         on the elbow and the spinner is never reached. All four rows are
-        also collected into the returned status text."""
+        also collected into the returned status text (elbow dropped,
+        normalized to 2-space indent and ASCII brackets)."""
         pane = (
             "some output\n"
             "· Auditing WindowStatus / PaneState usage… (1m 6s · thinking)\n"
@@ -152,10 +154,10 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Auditing WindowStatus / PaneState usage… (1m 6s · thinking)\n"
-            "  ⎿  ◼ Audit WindowStatus usage\n"
-            "     ◻ Clarify refactor scope\n"
-            "     ◻ Propose refactor approaches\n"
-            "     ◻ Write design doc"
+            "  [>] Audit WindowStatus usage\n"
+            "  [ ] Clarify refactor scope\n"
+            "  [ ] Propose refactor approaches\n"
+            "  [ ] Write design doc"
         )
 
     def test_lone_elbow_tool_output_still_bails(self, chrome: str):
@@ -181,20 +183,31 @@ class TestParseStatusLine:
     def test_skips_through_long_task_checklist(self, chrome: str):
         """A checklist larger than the legacy 10-line scan window still
         finds the spinner — checklist lines are free-skip, not counted.
-        All rows are collected; truncation only kicks in per-line if
-        any row is long."""
+        All rows are collected and normalized to ASCII brackets."""
         tasks = "\n".join(f"  ◻ Task {i}" for i in range(20))
+        expected_rows = "\n".join(f"  [ ] Task {i}" for i in range(20))
         pane = f"output\n✽ Running…\n{tasks}\n\n{chrome}"
-        assert parse_status_line(pane) == f"Running…\n{tasks}"
+        assert parse_status_line(pane) == f"Running…\n{expected_rows}"
 
     def test_all_checklist_glyphs_are_skippable(self, chrome: str):
-        """Each built-in TodoWrite checkbox glyph must be free-skip and
-        its row must be collected into the returned status text."""
+        """Each built-in TodoWrite checkbox glyph is free-skip and
+        normalized to the bracket it maps to."""
+        expected_bracket = {
+            "◼": "[>]",
+            "◻": "[ ]",
+            "☐": "[ ]",
+            "☒": "~~[x] Some task~~",  # wrapped in strikethrough
+            "✔": "~~[x] Some task~~",
+            "✓": "~~[x] Some task~~",
+        }
         for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
             pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
-            assert (
-                parse_status_line(pane) == f"Running…\n  {glyph} Some task"
-            ), f"failed for glyph {glyph!r}"
+            bracket = expected_bracket[glyph]
+            if bracket.startswith("~~"):
+                expected = f"Running…\n  {bracket}"
+            else:
+                expected = f"Running…\n  {bracket} Some task"
+            assert parse_status_line(pane) == expected, f"failed for glyph {glyph!r}"
 
     def test_checklist_only_no_spinner_returns_none(self, chrome: str):
         """Pane with task list but no spinner must not false-positive."""
@@ -214,7 +227,7 @@ class TestParseStatusLine:
 
     def test_checklist_plus_rating_modal(self, chrome: str):
         """Checklist and overlay modal can co-exist between spinner and chrome;
-        checklist rows get collected, rating-modal rows do not."""
+        checklist rows get collected (normalized), rating-modal rows do not."""
         pane = (
             "✶ Working on stuff…\n"
             "  ◼ Task 1\n"
@@ -224,13 +237,16 @@ class TestParseStatusLine:
             "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
             f"{chrome}"
         )
-        assert parse_status_line(pane) == ("Working on stuff…\n  ◼ Task 1\n  ◻ Task 2")
+        assert (
+            parse_status_line(pane) == "Working on stuff…\n  [>] Task 1\n  [ ] Task 2"
+        )
 
     def test_skips_todowrite_pending_tail(self, chrome: str):
         """When a TodoWrite list exceeds the render window, CC appends a
         `      … +N pending[, M completed]` tail between the last visible
         checkbox and the chrome. The tail must be skipped during scan AND
-        collected into the returned status text alongside the checklist."""
+        collected into the returned status text alongside the checklist.
+        All rows are normalized to 2-space indent + ASCII brackets."""
         pane = (
             "✽ Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)\n"
             "  ⎿  ◼ Task A1: claude_state.py + types\n"
@@ -241,10 +257,10 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Implementing claude_state types… (1m 52s · ↓ 1.5k tokens)\n"
-            "  ⎿  ◼ Task A1: claude_state.py + types\n"
-            "     ◻ Execute plan via subagent-driven-dev\n"
-            "     ◻ Task A2: BlockedUI into tmux_pane_parser\n"
-            "      … +7 pending"
+            "  [>] Task A1: claude_state.py + types\n"
+            "  [ ] Execute plan via subagent-driven-dev\n"
+            "  [ ] Task A2: BlockedUI into tmux_pane_parser\n"
+            "  … +7 pending"
         )
 
     def test_skips_todowrite_pending_and_completed_tail(self, chrome: str):
@@ -259,9 +275,9 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Wiring BlockedUI into parser… (13m 45s · ↓ 29.6k tokens)\n"
-            "  ⎿  ◼ Task A2: BlockedUI into pane_parser\n"
-            "     ◻ Task B1: Frontend StateCache rewire\n"
-            "      … +6 pending, 1 completed"
+            "  [>] Task A2: BlockedUI into pane_parser\n"
+            "  [ ] Task B1: Frontend StateCache rewire\n"
+            "  … +6 pending, 1 completed"
         )
 
     # ── TodoWrite content is appended to spinner text ───────────────────
@@ -282,14 +298,15 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Nesting… (12s · thinking)\n"
-            "  ⎿  ◼ Refactor types layer\n"
-            "     ◻ Refactor data layer\n"
-            "     ◻ Refactor parser module"
+            "  [>] Refactor types layer\n"
+            "  [ ] Refactor data layer\n"
+            "  [ ] Refactor parser module"
         )
 
     def test_todowrite_overflow_tail_is_appended(self, chrome: str):
         """The `… +N pending[, M completed]` overflow row must be
-        included in the appended content, same as checkbox rows."""
+        included in the appended content, with normalized 2-space
+        indent matching the checkbox rows above it."""
         pane = (
             "✽ Brewing… (5m · thinking)\n"
             "  ⎿  ◼ Task 1\n"
@@ -299,16 +316,16 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Brewing… (5m · thinking)\n"
-            "  ⎿  ◼ Task 1\n"
-            "     ◻ Task 2\n"
-            "      … +8 pending, 2 completed"
+            "  [>] Task 1\n"
+            "  [ ] Task 2\n"
+            "  … +8 pending, 2 completed"
         )
 
     def test_rating_modal_is_skipped_not_appended(self, chrome: str):
         """Overlay lines (session-rating modal) are skipped during the
         scan AND NOT appended — the user shouldn't see them rendered
         as part of Claude's working context. TodoWrite rows in the
-        same pane still appear in the output."""
+        same pane still appear in the output, normalized."""
         pane = (
             "✶ Working on stuff…\n"
             "  ◼ Task 1\n"
@@ -318,24 +335,59 @@ class TestParseStatusLine:
             "  1: Bad    2: Fine   3: Good   0: Dismiss\n"
             f"{chrome}"
         )
-        assert parse_status_line(pane) == ("Working on stuff…\n  ◼ Task 1\n  ◻ Task 2")
+        assert (
+            parse_status_line(pane) == "Working on stuff…\n  [>] Task 1\n  [ ] Task 2"
+        )
+
+    def test_done_row_wrapped_in_markdown_strikethrough(self, chrome: str):
+        """Completed rows (`✔` / `✓` / `☒`) become `~~[x] text~~` so
+        the Telegram frontend's MarkdownV2 pipeline renders them with
+        native strikethrough. The wrap is GitHub-flavored double
+        tilde; the frontend's convert_markdown translates to
+        MarkdownV2 single-tilde."""
+        pane = (
+            "✶ Cleaning up… (2m · thinking)\n"
+            "  ⎿  ✔ Write migration script\n"
+            "     ◼ Run migration\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == (
+            "Cleaning up… (2m · thinking)\n"
+            "  ~~[x] Write migration script~~\n"
+            "  [>] Run migration"
+        )
 
     def test_long_task_row_truncated_to_50_chars(self, chrome: str):
-        """Task rows longer than 50 characters get truncated to the
-        first 50 characters with an ellipsis appended, so a pane with
-        verbose task names doesn't blow up the Telegram status message
-        size. The spinner line itself is not truncated."""
-        long_task = "  ◼ " + "A" * 80
-        pane = f"✽ Running…\n{long_task}\n{chrome}"
-        assert parse_status_line(pane) == ("Running…\n" + long_task[:50] + "…")
+        """A normalized row whose indent + bracket + text exceeds 50
+        characters is truncated with an ellipsis appended. Spinner
+        line itself is never truncated."""
+        pane = f"✽ Running…\n  ◼ {'A' * 80}\n{chrome}"
+        result = parse_status_line(pane)
+        assert result is not None
+        rows = result.split("\n")
+        assert rows[0] == "Running…"
+        assert rows[1].startswith("  [>] ")
+        assert rows[1].endswith("…")
+        assert len(rows[1]) == 51  # 50-char budget + trailing ellipsis
+
+    def test_done_row_truncation_preserves_closing_tilde(self, chrome: str):
+        """Truncation for a completed row must leave the closing `~~`
+        intact; an unbalanced strikethrough would make MarkdownV2
+        parsing fall back to plain-text rendering in the frontend."""
+        pane = f"✽ Running…\n  ✔ {'B' * 80}\n{chrome}"
+        result = parse_status_line(pane)
+        assert result is not None
+        rows = result.split("\n")
+        assert rows[1].startswith("  ~~[x] ")
+        assert rows[1].endswith("~~")
 
     def test_task_row_at_50_chars_not_truncated(self, chrome: str):
-        """Exactly 50 characters stays unchanged — truncation is
-        strictly for rows longer than the limit."""
-        task = "  ◼ " + "X" * 46  # 4 + 46 = 50
-        assert len(task) == 50
-        pane = f"✽ Running…\n{task}\n{chrome}"
-        assert parse_status_line(pane) == f"Running…\n{task}"
+        """A normalized row whose length is exactly 50 stays
+        unchanged — truncation is strictly for rows exceeding the
+        budget."""
+        task_text = "X" * 44  # 2 indent + "[>] " (4) + 44 = 50
+        pane = f"✽ Running…\n  ◼ {task_text}\n{chrome}"
+        assert parse_status_line(pane) == f"Running…\n  [>] {task_text}"
 
     def test_no_todowrite_returns_single_line(self, chrome: str):
         """Backward compat: panes without TodoWrite content return the
@@ -370,12 +422,12 @@ class TestParseStatusLine:
         )
         assert parse_status_line(pane) == (
             "Nesting… (12s · thinking)\n"
-            "  ⎿  ◻ Refactor foo 类型层 (foo.types)\n"
-            "     ◻ Refactor foo 数据层 (foo.data / models)\n"
-            "     ◻ Refactor foo 解析层 (foo.parser)\n"
-            "     ◻ Refactor foo 状态机 (foo.state)\n"
-            "     ◻ Refactor foo 监听层 (foo.monitor / watcher)\n"
-            "      … +7 pending"
+            "  [ ] Refactor foo 类型层 (foo.types)\n"
+            "  [ ] Refactor foo 数据层 (foo.data / models)\n"
+            "  [ ] Refactor foo 解析层 (foo.parser)\n"
+            "  [ ] Refactor foo 状态机 (foo.state)\n"
+            "  [ ] Refactor foo 监听层 (foo.monitor / watcher)\n"
+            "  … +7 pending"
         )
 
 

@@ -9,6 +9,53 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.4.0 — 2026-04-21
+
+### Changed
+
+- `parse_status_line` reshapes the TodoWrite rows it appends to the
+  returned status text so frontends can render them without a
+  monospace code block. The elbow connector `⎿` is dropped; leading
+  whitespace is normalized to two spaces on every row (including the
+  `… +N pending` overflow tail); and the Unicode checkbox glyphs are
+  replaced with ASCII bracket markers:
+  - `◻` / `☐` → `[ ]` (pending)
+  - `◼`       → `[>]` (in progress)
+  - `✔` / `✓` / `☒` → `[x]` (completed)
+  Completed rows are additionally wrapped in GitHub-flavored
+  `~~...~~` so the Telegram frontend's markdown pipeline renders them
+  with native MarkdownV2 strikethrough. ASCII brackets never trigger
+  emoji-style rendering on any client, so columns line up without
+  font tricks.
+
+- Row truncation (`_TODO_ROW_MAX_LEN`) now accounts for the `~~` wrap
+  on completed rows so closing tildes stay balanced after truncation;
+  an unbalanced wrap would have forced the frontend's MarkdownV2
+  parse to fall back to plain text and lose formatting on every
+  status update.
+
+### Removed
+
+- `_force_text_style` (the U+FE0E VS-15 approach) is gone. Telegram's
+  mobile pre-block renderer ignored the variation selector anyway, so
+  it bought nothing.
+
+### Docs
+
+- `docs/integration-prompts.md` is updated to match: the prompt is
+  tool-agnostic (some CC harnesses expose `TaskCreate` instead of
+  `TodoWrite`), and the Verify block runs the parser against a
+  temp-file path so `uv run` stderr noise no longer leaks into the
+  captured parse result. Layer 2's success check now gates on both a
+  spinner ellipsis AND at least one ASCII-bracket task row.
+
+### Tests
+
+- Pre-existing TodoWrite tests updated to assert the new normalized
+  shape; new cases cover the strikethrough wrap
+  (`test_done_row_wrapped_in_markdown_strikethrough`) and the
+  truncation-preserves-closing-tilde invariant.
+
 ## 2.3.0 — 2026-04-21
 
 ### Added
