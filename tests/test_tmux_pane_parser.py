@@ -193,9 +193,9 @@ class TestParseStatusLine:
         row is preserved verbatim in the returned text."""
         for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
             pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
-            assert (
-                parse_status_line(pane) == f"Running…\n  {glyph} Some task"
-            ), f"failed for glyph {glyph!r}"
+            assert parse_status_line(pane) == f"Running…\n  {glyph} Some task", (
+                f"failed for glyph {glyph!r}"
+            )
 
     def test_checklist_only_no_spinner_returns_none(self, chrome: str):
         """Pane with task list but no spinner must not false-positive."""
