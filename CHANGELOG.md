@@ -9,6 +9,20 @@ require a major bump.
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- Three previously-unprefixed env vars are renamed to use the `CCMUX_`
+  namespace, so backend's settings are no longer at risk of colliding
+  with unrelated tools' env vars:
+  - `TMUX_SESSION_NAME` → `CCMUX_TMUX_SESSION_NAME`
+  - `CLAUDE_COMMAND` → `CCMUX_CLAUDE_COMMAND`
+  - `MONITOR_POLL_INTERVAL` → `CCMUX_MONITOR_POLL_INTERVAL`
+
+  Update `.env` files (and any shell exports) accordingly. Defaults are
+  unchanged. Note: the previously-namespaced env vars
+  (`CCMUX_DIR`, `CCMUX_CLAUDE_PROJECTS_PATH`, `CCMUX_SHOW_USER_MESSAGES`,
+  `CCMUX_CLAUDE_PROC_NAMES`) are unaffected.
+
 ## 2.5.1 — 2026-04-21
 
 ### Fixed
