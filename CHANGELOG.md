@@ -9,6 +9,19 @@ require a major bump.
 
 ## [Unreleased]
 
+## 2.5.2 — 2026-04-25
+
+### Fixed
+
+- Messages starting with `-` now reach Claude; previously tmux's
+  argument parser consumed the leading dash as a flag. Backend's
+  `send_keys` invoked libtmux's `Pane.send_keys`, which shells out
+  to `tmux send-keys -l <text>` with no `--` separator, so a
+  leading `-` in user text (e.g. a markdown bullet `- foo`) was
+  treated as a flag and the entire `send-keys` command errored
+  out — nothing was sent to the pane. Backend now bypasses
+  libtmux's wrapper and emits `--` itself.
+
 ## 2.5.1 — 2026-04-21
 
 ### Fixed

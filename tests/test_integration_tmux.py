@@ -125,3 +125,28 @@ def test_create_session_on_registry_entry_with_no_prior_tmux_session(
     )
     assert ok, msg
     assert wid.startswith("@")
+
+
+def test_send_keys_literal_text_with_leading_dash(registry, session_name, tmp_path):
+    """Regression: a string starting with '-' must reach the pane literally.
+
+    libtmux 0.55's Pane.send_keys invokes `tmux send-keys -l <text>` without
+    a `--` separator, so when <text> begins with '-' tmux's argument parser
+    consumes it as a flag and the command errors out — nothing reaches the
+    pane. Backend bypasses libtmux's wrapper and emits `--` itself; this
+    test fails on the unfixed code path because the literal text never
+    appears in the captured pane.
+    """
+    tm = registry.get_or_create(session_name)
+    _, _, _, wid = asyncio.run(
+        tm.create_session(work_dir=str(tmp_path), start_claude=False)
+    )
+
+    sent = asyncio.run(tm.send_keys(wid, "- hello", enter=False, literal=True))
+    assert sent
+
+    # tmux needs a tick to render the buffer before capture-pane sees it.
+    time.sleep(0.2)
+    captured = asyncio.run(tm.capture_pane(wid))
+    assert captured is not None
+    assert "- hello" in captured
