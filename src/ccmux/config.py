@@ -6,12 +6,12 @@ ship their own `config.py` for bot tokens, allow-lists, etc.
 .env loading priority: local `.env` (cwd) > `$CCMUX_DIR/.env` (default
 `~/.ccmux/.env`). Reads:
 
-- `TMUX_SESSION_NAME` (default `__ccmux__`) — reserved session that
-  holds the bot process itself; never listed as a binding target.
-- `CLAUDE_COMMAND` (default `claude`) — command to launch Claude Code.
+- `CCMUX_TMUX_SESSION_NAME` (default `__ccmux__`) — reserved session
+  that holds the bot process itself; never listed as a binding target.
+- `CCMUX_CLAUDE_COMMAND` (default `claude`) — command to launch Claude Code.
 - `CCMUX_CLAUDE_PROJECTS_PATH` / `CLAUDE_CONFIG_DIR` — where Claude
   Code writes its JSONL transcripts.
-- `MONITOR_POLL_INTERVAL` (default `0.5` seconds) — fast-loop tick.
+- `CCMUX_MONITOR_POLL_INTERVAL` (default `0.5` seconds) — fast-loop tick.
 - `CCMUX_DIR` (default `~/.ccmux`) — state-file root.
 """
 
@@ -48,10 +48,10 @@ class Config:
             logger.debug("Loaded env from %s", global_env)
 
         # Reserved tmux session name — holds the bot process itself.
-        self.tmux_session_name = os.getenv("TMUX_SESSION_NAME", "__ccmux__")
+        self.tmux_session_name = os.getenv("CCMUX_TMUX_SESSION_NAME", "__ccmux__")
 
         # Claude command to run in new windows
-        self.claude_command = os.getenv("CLAUDE_COMMAND", "claude")
+        self.claude_command = os.getenv("CCMUX_CLAUDE_COMMAND", "claude")
 
         self.instances_file = self.config_dir / "claude_instances.json"
         self.monitor_state_file = self.config_dir / "claude_monitor.json"
@@ -65,7 +65,9 @@ class Config:
         else:
             self.claude_projects_path = Path.home() / ".claude" / "projects"
 
-        self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "0.5"))
+        self.monitor_poll_interval = float(
+            os.getenv("CCMUX_MONITOR_POLL_INTERVAL", "0.5")
+        )
 
         # Emit user-typed messages as ClaudeMessage events. Frontends
         # often prefer to drop these (they echoed them already).
