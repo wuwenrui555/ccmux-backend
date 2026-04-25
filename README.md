@@ -83,8 +83,6 @@ This registers `ccmux hook` as Claude Code's `SessionStart` callback so the inst
 
 ### 2. Choose a frontend
 
-This library does not run on its own. It needs a frontend that consumes the `Backend` Protocol.
-
 #### 2.1 Reference frontend
 
 > [!NOTE]
@@ -158,7 +156,7 @@ Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env`
 
 ### Frontends
 
-See e.g. [GitHub - wuwenrui555/ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram).
+[ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram) writes:
 
 - `ccmux.log` — runtime log
 - `topic_bindings.json` — topic ↔ session bindings
