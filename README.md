@@ -1,8 +1,19 @@
 # ccmux
 
+[![CI](https://github.com/wuwenrui555/ccmux-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/wuwenrui555/ccmux-backend/actions/workflows/ci.yml)
+[![Latest tag](https://img.shields.io/github/v/tag/wuwenrui555/ccmux-backend)](https://github.com/wuwenrui555/ccmux-backend/tags)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/github/license/wuwenrui555/ccmux-backend)](LICENSE)
+
 The Claude–tmux bridge: a backend library that mirrors Claude Code sessions running inside `tmux` windows into a small, stable Python API.
 
-`ccmux` does not talk to any chat platform. It monitors tmux panes, parses Claude Code's JSONL transcripts, tracks tool_use / tool_result pairing, and exposes a single `Backend` Protocol that any frontend (Telegram bot, CLI, web UI) can drive.
+`ccmux` exposes a single `Backend` Protocol that any frontend (Telegram bot, CLI, web UI) can drive. It monitors tmux panes, parses Claude Code's JSONL transcripts, and tracks tool_use / tool_result pairing — chat-platform integration is the frontend's job.
+
+## Prerequisites
+
+- Python ≥3.12
+- [`tmux`](https://tmux.github.io/)
+- [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) (the `claude` CLI)
 
 ## Components
 
@@ -50,6 +61,14 @@ Lower-level helpers for frontends that capture panes themselves rather than goin
 - `parse_status_line` — Parse the spinner / working status line.
 - `parse_usage_output` — Parse the `/usage` modal capture.
 
+## Development policy
+
+Feature work belongs in the frontend (e.g. [ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram)) — not here. The backend only changes for:
+
+- Claude Code releases breaking the parser, JSONL, or hook contract.
+- Confirmed backend bugs (race, leak, logic error).
+- Deliberate major bumps — any change to `ccmux.api` symbols.
+
 ## Usage
 
 ### 1. Install the hook
@@ -84,7 +103,7 @@ dependencies = [
 
 For reproducible builds, pin to a release tag (e.g. `@v2.5.1`) instead of `@main`. See the [Releases page](https://github.com/wuwenrui555/ccmux-backend/releases).
 
-A minimum frontend looks like:
+A minimal frontend looks like:
 
 ```python
 import asyncio
@@ -145,34 +164,6 @@ See e.g. [GitHub - wuwenrui555/ccmux-telegram](https://github.com/wuwenrui555/cc
 - `topic_bindings.json` — topic ↔ session bindings
 - `images/` — downloaded photos
 
-## Development policy
-
-The `ccmux.api` surface is **frozen at v2.0**. Day-to-day feature work
-— new Telegram commands, new inbound flows, richer rendering, rate
-limiting, retries — should happen in the **frontend** (e.g.
-`ccmux-telegram`) rather than here.
-
-The backend only changes for one of these reasons:
-
-- A Claude Code release broke a parser or changed the JSONL / hook
-  contract (see [Claude Code compatibility](docs/claude-code-compat.md)).
-- A confirmed backend bug (race, leak, logical error in the Protocol
-  implementation).
-- A deliberate major bump — any signature or semantic change to
-  anything re-exported from `ccmux.api` requires a **new major
-  version**.
-
-If you find yourself wanting to add a frontend-facing feature to the
-backend, that's a signal to add it to the frontend instead.
-
 ## Claude Code compatibility
 
-Claude Code evolves its pane UI, JSONL schema, and hook API between
-releases. The modules most likely to break — and the safety net
-(`~/.ccmux/drift.log`) that surfaces those breaks — are documented in
-[`docs/claude-code-compat.md`](docs/claude-code-compat.md). Start there
-whenever a Claude Code upgrade causes the bot to misbehave.
-
-## License
-
-MIT (see `LICENSE`).
+Pane UI, JSONL schema, and hook API drift between Claude Code releases. The modules most likely to break and the `~/.ccmux/drift.log` safety net are documented in [docs/claude-code-compat.md](docs/claude-code-compat.md). Check there first when a Claude Code upgrade breaks the bot.
