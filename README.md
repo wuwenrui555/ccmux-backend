@@ -4,71 +4,87 @@ The Claude–tmux bridge: a backend library that mirrors Claude Code sessions ru
 
 `ccmux` does not talk to any chat platform. It monitors tmux panes, parses Claude Code's JSONL transcripts, tracks tool_use / tool_result pairing, and exposes a single `Backend` Protocol that any frontend (Telegram bot, CLI, web UI) can drive.
 
-## What's in the box
+## Components
 
-- `Backend` Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols, plus `DefaultBackend` implementation
-- `TmuxSessionRegistry` — multi-session tmux orchestration (`tmux_registry` singleton)
-- `ClaudeInstanceRegistry` — `instance_id → (session_id, cwd)` map, backed by `~/.ccmux/claude_instances.json`
-- `ClaudeState` — sealed union (`Working | Idle | Blocked | Dead`) pushed per instance via `on_state` callback
-- `MessageMonitor` — byte-offset incremental JSONL reader with tool_use / tool_result pairing
-- `StateMonitor` — tmux pane capture + status line / interactive UI parsing, emits `ClaudeState` observations
-- `TranscriptParser` — JSONL-to-`ClaudeMessage` parser; emits standard Markdown (including `>` blockquotes for collapsible regions)
-- `ccmux hook` CLI — Claude Code `SessionStart` hook that populates the instance map
+Everything below is exported from `ccmux.api`. Anything imported from submodules (`ccmux.tmux`, `ccmux.backend`, …) is internal and may change without notice.
 
-## Public API
+### Lifecycle
 
-Everything a frontend needs lives at `ccmux.api`:
+- `Backend` — Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols.
+- `TmuxOps` — Tmux-side operations sub-protocol.
+- `ClaudeOps` — Claude-side operations sub-protocol.
+- `DefaultBackend` — Default `Backend` implementation; compose with `tmux_registry` and a `ClaudeInstanceRegistry`.
+- `get_default_backend` / `set_default_backend` — Process-wide singleton accessors.
 
-```text
-ccmux.api exports (after v2.0.0)
-─────────────────────────────────────────
-Protocol + lifecycle
-  Backend, TmuxOps, ClaudeOps
-  DefaultBackend, get_default_backend, set_default_backend
-State family
-  ClaudeState (sealed union of Working | Idle | Blocked | Dead)
-  Working, Idle, Blocked, Dead  — variants
-  BlockedUI  — StrEnum for Blocked.ui
-Message / transcript
-  ClaudeMessage, TranscriptParser
-Instance model
-  ClaudeInstance, ClaudeInstanceRegistry, ClaudeSession
-Composition inputs
-  TmuxSessionRegistry
-Parser surfaces
-  InteractiveUIContent, UsageInfo
-  extract_bash_output, extract_interactive_content
-  parse_status_line, parse_usage_output
-Query types
-  TmuxWindow
-Composition helpers
-  tmux_registry, sanitize_session_name
-```
+### State
 
-Anything imported from submodules (`ccmux.tmux`, `ccmux.backend`, …) is internal and may change without notice. Consumers outside the library should pin to `ccmux.api` only.
+- `ClaudeState` — Sealed union pushed per instance via the `on_state` callback.
+- `Working` / `Idle` / `Blocked` / `Dead` — `ClaudeState` variants.
+- `BlockedUI` — StrEnum identifying which Blocked UI is on screen (`Blocked.ui`).
 
-## Install
+### Messages
+
+- `ClaudeMessage` — One parsed message; `text` is standard CommonMark.
+- `TranscriptParser` — JSONL → `ClaudeMessage` stream; thinking, tool_result, and long output go inside `>` blockquotes for collapsible-UI rendering.
+
+### Instances
+
+- `ClaudeInstance` — Backend view of one running Claude Code process (`instance_id`, `window_id`, `session_id`, `cwd`).
+- `ClaudeInstanceRegistry` — Persistent `instance_id → ClaudeInstance` map at `~/.ccmux/claude_instances.json`; populated by the `ccmux hook` CLI on Claude Code `SessionStart`.
+- `ClaudeSession` — Summary of a Claude Code JSONL session file (`session_id`, `summary`, `message_count`, `file_path`).
+
+### Tmux
+
+- `TmuxSessionRegistry` / `tmux_registry` — Multi-session tmux orchestration (the singleton you compose into `DefaultBackend`).
+- `TmuxWindow` — Window query return type, identified by `window_id` (e.g. `@5`).
+- `sanitize_session_name` — Helper that produces a tmux-safe session name.
+
+### Parser surfaces
+
+Lower-level helpers for frontends that capture panes themselves rather than going through the backend's emit loop:
+
+- `InteractiveUIContent` — Parsed Blocked-UI payload.
+- `UsageInfo` — Parsed `/usage` modal contents.
+- `extract_bash_output` — Pull `! cmd` output out of a captured pane.
+- `extract_interactive_content` — Parse a Blocked overlay.
+- `parse_status_line` — Parse the spinner / working status line.
+- `parse_usage_output` — Parse the `/usage` modal capture.
+
+## Usage
+
+### 1. Install the hook
+
+Required for either frontend. Auto-install with:
 
 ```bash
-uv add ccmux  # or: pip install ccmux
+ccmux hook --install
 ```
 
-Configure once:
+This registers `ccmux hook` as Claude Code's `SessionStart` callback so the instance map gets populated.
 
-```bash
-# ~/.claude/settings.json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "ccmux hook", "timeout": 5 }] }
-    ]
-  }
-}
+### 2. Choose a frontend
+
+This library does not run on its own. It needs a frontend that consumes the `Backend` Protocol.
+
+#### 2.1 Reference frontend
+
+> [!NOTE]
+> Want a ready-made Telegram bot? See [GitHub - wuwenrui555/ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram).
+
+#### 2.2 Custom frontend
+
+Depend on ccmux as a git URL:
+
+```toml
+# pyproject.toml
+dependencies = [
+    "ccmux @ git+https://github.com/wuwenrui555/ccmux-backend.git@main",
+]
 ```
 
-Or auto-install: `ccmux hook --install`.
+For reproducible builds, pin to a release tag (e.g. `@v2.5.1`) instead of `@main`. See the [Releases page](https://github.com/wuwenrui555/ccmux-backend/releases).
 
-## Minimal frontend shape
+A minimum frontend looks like:
 
 ```python
 import asyncio
@@ -97,29 +113,37 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Message rendering
+## Environment variables
 
-`ClaudeMessage.text` is **standard CommonMark Markdown**. Tool results, thinking blocks, and long command outputs use `>` blockquotes for regions that a rich frontend may want to render as collapsible UI. Plain-text frontends display them as readable quoted lines.
+Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env` in the cwd takes precedence.
 
-## State files (under `~/.ccmux/`, overridable with `CCMUX_DIR`)
+- `CCMUX_DIR` (default `~/.ccmux`) — state-file root
+- `CCMUX_TMUX_SESSION_NAME` (default `__ccmux__`) — tmux session your frontend runs in; backend skips it when listing windows so it's never treated as a Claude session
+- `CCMUX_CLAUDE_COMMAND` (default `claude`) — command to launch Claude Code
+- `CCMUX_CLAUDE_PROJECTS_PATH` — where Claude Code writes its JSONL transcripts. Falls back to `$CLAUDE_CONFIG_DIR/projects` (Claude Code's own var, useful for Claude variants like cc-mirror), then to `~/.claude/projects`.
+- `CCMUX_SHOW_USER_MESSAGES` (default `true`) — emit user-typed messages as events
+- `CCMUX_MONITOR_POLL_INTERVAL` (default `0.5`) — fast-loop tick in seconds
+- `CCMUX_CLAUDE_PROC_NAMES` (default `claude,node`) — comma-separated pane foreground process names counted as "Claude is alive". Override if a Claude Code release switches runtimes (e.g. to Bun) and the liveness checker starts flagging every window as dead. See [Claude Code compatibility](docs/claude-code-compat.md).
 
-- `claude_instances.json` — written by the `ccmux hook` CLI on Claude Code `SessionStart`
+`DefaultBackend(show_user_messages=…)` takes precedence over the env var.
+
+## State files (under `$CCMUX_DIR`, default `~/.ccmux/`)
+
+### Backend
+
+- `claude_instances.json` / `claude_instances.lock` — instance registry; written by the `ccmux hook` CLI on Claude Code `SessionStart`
 - `claude_monitor.json` — per-session JSONL byte offsets, written by `MessageMonitor`
 - `drift.log` — created on first pane-parser drift warning (Claude Code UI change alert)
 - `hook.log` — appended by the `ccmux hook` CLI on every invocation; captures unhandled tracebacks for postmortems after Claude Code's inline error banner scrolls away
 - `parser_config.json` — optional; overrides brittle Claude Code parser constants without a backend release. See [Claude Code compatibility](docs/claude-code-compat.md).
 
-## Environment variables
+### Frontends
 
-- `TMUX_SESSION_NAME` (default `__ccmux__`) — reserved session holding the frontend process itself
-- `CLAUDE_COMMAND` (default `claude`) — command to launch Claude Code
-- `CCMUX_CLAUDE_PROJECTS_PATH` / `CLAUDE_CONFIG_DIR` — where Claude Code writes its JSONL transcripts
-- `MONITOR_POLL_INTERVAL` (default `0.5`) — fast-loop tick in seconds
-- `CCMUX_DIR` (default `~/.ccmux`) — state-file root
-- `CCMUX_SHOW_USER_MESSAGES` (default `true`) — emit user-typed messages as events
-- `CCMUX_CLAUDE_PROC_NAMES` (default `claude,node`) — comma-separated pane foreground process names counted as "Claude is alive". Override if a Claude Code release switches runtimes (e.g. to Bun) and the liveness checker starts flagging every window as dead. See [Claude Code compatibility](docs/claude-code-compat.md).
+See e.g. [GitHub - wuwenrui555/ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram).
 
-`DefaultBackend(show_user_messages=…)` takes precedence over the env var.
+- `ccmux.log` — runtime log
+- `topic_bindings.json` — topic ↔ session bindings
+- `images/` — downloaded photos
 
 ## Development policy
 
