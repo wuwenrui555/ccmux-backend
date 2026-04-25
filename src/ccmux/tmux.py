@@ -312,7 +312,12 @@ class TmuxSession:
                     if not pane:
                         logger.error("No active pane in window %s", window_id)
                         return False
-                    pane.send_keys(chars, enter=False, literal=True)
+                    # Bypass libtmux's send_keys wrapper: it invokes
+                    # `tmux send-keys -l <text>` without a `--` separator,
+                    # so a leading "-" in `chars` (e.g. a markdown bullet
+                    # "- foo") is consumed by tmux's argument parser as a
+                    # flag and the whole command errors out.
+                    pane.cmd("send-keys", "-l", "--", chars)
                     return True
                 except _TMUX_ERRORS as e:
                     logger.error("Failed to send keys to window %s: %s", window_id, e)
@@ -369,7 +374,15 @@ class TmuxSession:
                     logger.error("No active pane in window %s", window_id)
                     return False
 
-                pane.send_keys(text, enter=enter, literal=literal)
+                if literal:
+                    # See note at the literal+enter call site: libtmux's
+                    # send_keys omits "--", so leading "-" in user text
+                    # is eaten as a flag. Bypass it. The outer
+                    # `if literal and enter:` branch handles enter=True;
+                    # this branch is reached only with enter=False.
+                    pane.cmd("send-keys", "-l", "--", text)
+                else:
+                    pane.send_keys(text, enter=enter, literal=literal)
                 return True
 
             except _TMUX_ERRORS as e:
