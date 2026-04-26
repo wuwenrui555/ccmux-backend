@@ -9,6 +9,8 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.0.0 — 2026-04-25
+
 ### Changed (BREAKING)
 
 - Three previously-unprefixed env vars are renamed to use the `CCMUX_`
@@ -22,6 +24,34 @@ require a major bump.
   unchanged. Note: the previously-namespaced env vars
   (`CCMUX_DIR`, `CCMUX_CLAUDE_PROJECTS_PATH`, `CCMUX_SHOW_USER_MESSAGES`,
   `CCMUX_CLAUDE_PROC_NAMES`) are unaffected.
+
+### Fixed
+
+- `parse_status_line` now skips Claude Code's `⎿  Tip: …` footer line
+  (e.g. `Tip: Connect Claude to your IDE · /ide`) instead of bailing
+  out as if it were unknown content. Without this, the frontend's
+  state cache flipped from Working to Idle while Claude was still
+  thinking, breaking long-running status updates.
+
+### Docs
+
+- README is restructured: merged "What's in the box" + "Public API"
+  into a single Components section (one bullet per `ccmux.api`
+  symbol with a one-line role); split Usage into "1. Install the
+  hook" / "2. Choose a frontend" with a callout pointing end users
+  to ccmux-telegram and a dependency-line + code-skeleton path for
+  custom frontends; reordered so Environment variables comes before
+  State files; added a Prerequisites section; added status badges;
+  trimmed the Development policy and Claude Code compatibility
+  sections; dropped the redundant "License" section in favour of
+  the badge.
+
+### Internal
+
+- Pre-commit's `ruff-pre-commit` is bumped from `v0.8.6` to
+  `v0.15.10` so commit-time formatting matches what `uv run ruff
+  format --check` (and CI) enforces. Resolves the recurring
+  `tests/test_tmux_pane_parser.py` reformat ping-pong.
 
 ## 2.5.2 — 2026-04-25
 
