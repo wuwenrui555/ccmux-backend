@@ -115,6 +115,21 @@ class TestParseStatusLine:
         pane = f"✽ Old spinner\nSome unknown modal line\n{chrome}"
         assert parse_status_line(pane) is None
 
+    def test_footer_tip_line_does_not_hide_spinner(self, chrome: str):
+        """CC slips a `⎿  Tip: …` footer line between the spinner and
+        chrome (e.g. `Tip: Connect Claude to your IDE · /ide`). The
+        spinner must still be detected; the tip itself must not appear
+        in the returned status text."""
+        pane = (
+            "✻ Cogitating… (1m 22s · ↑ 2.9k tokens · thought for 48s)\n"
+            "  ⎿  Tip: Connect Claude to your IDE · /ide\n"
+            f"{chrome}"
+        )
+        assert (
+            parse_status_line(pane)
+            == "Cogitating… (1m 22s · ↑ 2.9k tokens · thought for 48s)"
+        )
+
     def test_skips_through_task_checklist(self, chrome: str):
         """TodoWrite checklist between spinner and chrome must not bail;
         task rows are collected verbatim and appended to the spinner
@@ -193,9 +208,9 @@ class TestParseStatusLine:
         row is preserved verbatim in the returned text."""
         for glyph in ("◼", "◻", "☐", "☒", "✔", "✓"):
             pane = f"✽ Running…\n  {glyph} Some task\n{chrome}"
-            assert (
-                parse_status_line(pane) == f"Running…\n  {glyph} Some task"
-            ), f"failed for glyph {glyph!r}"
+            assert parse_status_line(pane) == f"Running…\n  {glyph} Some task", (
+                f"failed for glyph {glyph!r}"
+            )
 
     def test_checklist_only_no_spinner_returns_none(self, chrome: str):
         """Pane with task list but no spinner must not false-positive."""

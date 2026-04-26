@@ -197,6 +197,11 @@ _BUILTIN_OVERLAY_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Session-rating modal (CC 2.1.x+).
     re.compile(r"^\s*●\s*How is Claude doing this session\?"),
     re.compile(r"^\s*1:\s*Bad\b"),
+    # Footer tip lines that CC slips between the spinner and chrome,
+    # e.g. `  ⎿  Tip: Connect Claude to your IDE · /ide`. The bare `⎿`
+    # is otherwise ambiguous with Bash tool output (see comment above
+    # TODO_PATTERNS), so the `Tip:` literal is what makes this safe.
+    re.compile(r"^\s*⎿\s+Tip:\s+"),
 )
 
 _BUILTIN_TODO_PATTERNS: tuple[re.Pattern[str], ...] = (
