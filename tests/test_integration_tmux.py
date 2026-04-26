@@ -150,3 +150,45 @@ def test_send_keys_literal_text_with_leading_dash(registry, session_name, tmp_pa
     captured = asyncio.run(tm.capture_pane(wid))
     assert captured is not None
     assert "- hello" in captured
+
+
+def test_send_keys_exits_copy_mode_before_sending(registry, session_name, tmp_path):
+    """Regression: send_keys must exit any active pane mode first.
+
+    When the user scrolls up in tmux, the pane enters copy-mode and
+    keystrokes get interpreted as vim-style navigation (`h`/`j`/`k`/`l`,
+    search via `/`, jump via `g`, …) instead of being typed into the
+    running shell. Bot-relayed text used to be silently swallowed by
+    that mode. send_keys now probes `#{pane_in_mode}` and emits
+    `send-keys -X cancel` before its real keystrokes.
+    """
+    tm = registry.get_or_create(session_name)
+    _, _, _, wid = asyncio.run(
+        tm.create_session(work_dir=str(tmp_path), start_claude=False)
+    )
+
+    session = tm.get_session()
+    assert session is not None
+    window = session.windows.get(window_id=wid)
+    pane = window.active_pane
+    assert pane is not None
+
+    # Force the pane into copy-mode and confirm.
+    pane.cmd("copy-mode")
+    in_mode_before = pane.cmd("display-message", "-p", "#{pane_in_mode}")
+    assert in_mode_before.stdout and in_mode_before.stdout[0].strip() == "1"
+
+    # Send a message — the fix should cancel copy-mode first, then type.
+    sent = asyncio.run(tm.send_keys(wid, "hello", enter=False, literal=True))
+    assert sent
+
+    # Pane should be back in normal mode after send_keys.
+    in_mode_after = pane.cmd("display-message", "-p", "#{pane_in_mode}")
+    assert in_mode_after.stdout and in_mode_after.stdout[0].strip() == "0"
+
+    # And "hello" must appear literally in the pane (not interpreted as
+    # the copy-mode navigation sequence h-e-l-l-o).
+    time.sleep(0.2)
+    captured = asyncio.run(tm.capture_pane(wid))
+    assert captured is not None
+    assert "hello" in captured

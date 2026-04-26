@@ -9,6 +9,21 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.0.1 — 2026-04-26
+
+### Fixed
+
+- `TmuxSession.send_keys` now exits any active pane mode (copy-mode,
+  view-mode, choose-mode, clock-mode) before injecting keystrokes.
+  Previously, if the user had scrolled up in the bound tmux window
+  (which puts the pane in copy-mode), bot-relayed messages were
+  consumed as vim-style navigation commands (`h`/`j`/`k`/…) and never
+  reached Claude Code's input — the pane visibly executed mode actions
+  like jump-forward instead. Probe is `display-message -p
+  '#{pane_in_mode}'` and the exit is `send-keys -X cancel`, both
+  no-ops outside any mode. Regression test
+  `test_send_keys_exits_copy_mode_before_sending` pins the behaviour.
+
 ## 3.0.0 — 2026-04-25
 
 ### Changed (BREAKING)
