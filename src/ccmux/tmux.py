@@ -49,6 +49,29 @@ class TmuxWindow:
     pane_current_command: str = ""  # Process running in active pane
 
 
+def _exit_pane_mode_if_active(pane: libtmux.Pane) -> None:
+    """Exit any active tmux pane mode so subsequent send-keys reach the shell.
+
+    When a pane is in copy-mode, view-mode, choose-mode (tree / buffer /
+    client / window), or clock-mode, keystrokes are interpreted as mode
+    commands rather than input. Sending `hello` while the pane is in copy
+    mode triggers `h` (cursor left), `e`, `l`, `l`, `o` against the copy
+    buffer instead of typing into Claude Code's input box.
+
+    `pane_in_mode` reports 1 for any of those modes; `send-keys -X cancel`
+    is tmux's universal mode-exit action and a no-op outside of any mode.
+    Best effort — failures are logged at debug and the caller still
+    proceeds with its send.
+    """
+    try:
+        result = pane.cmd("display-message", "-p", "#{pane_in_mode}")
+        in_mode = bool(result.stdout) and result.stdout[0].strip() == "1"
+        if in_mode:
+            pane.cmd("send-keys", "-X", "cancel")
+    except _TMUX_ERRORS as e:
+        logger.debug("pane_in_mode probe failed for %s: %s", pane, e)
+
+
 def sanitize_session_name(name: str, existing_names: set[str]) -> str:
     """Sanitize a string for use as a tmux session name.
 
@@ -312,6 +335,10 @@ class TmuxSession:
                     if not pane:
                         logger.error("No active pane in window %s", window_id)
                         return False
+                    # Exit copy/view/choose/clock mode so the keystrokes
+                    # below land in the shell input rather than being
+                    # interpreted as vim-style mode commands.
+                    _exit_pane_mode_if_active(pane)
                     # Bypass libtmux's send_keys wrapper: it invokes
                     # `tmux send-keys -l <text>` without a `--` separator,
                     # so a leading "-" in `chars` (e.g. a markdown bullet
@@ -373,6 +400,11 @@ class TmuxSession:
                 if not pane:
                     logger.error("No active pane in window %s", window_id)
                     return False
+
+                # Exit any active pane mode (copy / view / choose / clock)
+                # so the keystrokes below reach the shell input rather
+                # than being interpreted as mode commands.
+                _exit_pane_mode_if_active(pane)
 
                 if literal:
                     # See note at the literal+enter call site: libtmux's
