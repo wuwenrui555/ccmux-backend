@@ -9,6 +9,25 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.0.2 — 2026-04-27
+
+### Changed
+
+- README now has a dedicated `Installation` section covering both
+  install paths: `uv tool install git+...` for someone who only wants
+  the backend (custom frontend or hook-only setup), and the editable
+  clone for local development. Previously the README jumped straight
+  into `ccmux hook --install` under `Usage` without explaining how
+  the `ccmux` CLI got onto `PATH` in the first place. The section
+  also points users who want to run `ccmux-telegram` at that repo's
+  README so they go through the side-by-side editable install
+  instead of installing twice.
+- `Usage` section trimmed: `Install the hook` moved into the new
+  `Installation` section, and the `Choose a frontend` wrapper
+  removed since its two children (`Reference frontend`, `Custom
+  frontend`) read fine as flat headings once they aren't numbered
+  steps.
+
 ## 3.0.1 — 2026-04-26
 
 ### Fixed
