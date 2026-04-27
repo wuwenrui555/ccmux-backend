@@ -69,9 +69,28 @@ Feature work belongs in the frontend (e.g. [ccmux-telegram](https://github.com/w
 - Confirmed backend bugs (race, leak, logic error).
 - Deliberate major bumps — any change to `ccmux.api` symbols.
 
-## Usage
+## Installation
 
-### 1. Install the hook
+### 1. Install the package
+
+The `ccmux` CLI is GitHub-install only (not published on PyPI). The simplest path for someone who only wants the backend (custom frontend, or just the Claude Code session-tracking hook):
+
+```bash
+uv tool install git+https://github.com/wuwenrui555/ccmux-backend.git
+```
+
+For local development, clone and install editable:
+
+```bash
+git clone https://github.com/wuwenrui555/ccmux-backend.git
+cd ccmux-backend
+uv tool install --editable .
+```
+
+> [!NOTE]
+> If you plan to run [ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram), follow its README instead — it installs `ccmux-backend` and `ccmux-telegram` side-by-side as editable uv tools so a single `git pull` updates both.
+
+### 2. Install the hook
 
 Required for either frontend. Auto-install with:
 
@@ -81,14 +100,14 @@ ccmux hook --install
 
 This registers `ccmux hook` as Claude Code's `SessionStart` callback so the instance map gets populated.
 
-### 2. Choose a frontend
+## Usage
 
-#### 2.1 Reference frontend
+### Reference frontend
 
 > [!NOTE]
 > Want a ready-made Telegram bot? See [GitHub - wuwenrui555/ccmux-telegram](https://github.com/wuwenrui555/ccmux-telegram).
 
-#### 2.2 Custom frontend
+### Custom frontend
 
 Depend on ccmux as a git URL:
 
