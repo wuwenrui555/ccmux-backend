@@ -27,7 +27,8 @@ from .claude_state import ClaudeState, Dead
 from .claude_transcript_parser import ClaudeMessage
 from .config import config
 from .message_monitor import MessageMonitor
-from .state_monitor import StateMonitor
+from .pid_session_resolver import resolve_for_pane as _resolve_via_pane
+from .state_monitor import StateMonitor, _claude_proc_names
 from .tmux import TmuxSessionRegistry, TmuxWindow
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,15 @@ class Backend(Protocol):
     claude: ClaudeOps
 
     def get_instance(self, instance_id: str) -> ClaudeInstance | None: ...
+
+    async def reconcile_instance(self, instance_id: str) -> ClaudeInstance | None:
+        """Compute the ClaudeInstance the bot should now talk to for
+        ``instance_id``, derived from current tmux state.
+
+        Pure read; no writes, no override mutations. Caller applies the
+        result via ``ClaudeInstanceRegistry.set_override``.
+        """
+        ...
 
     async def start(
         self,
@@ -187,6 +197,102 @@ class DefaultBackend:
 
     def get_instance(self, instance_id: str) -> ClaudeInstance | None:
         return self._registry.get(instance_id)
+
+    async def reconcile_instance(self, instance_id: str) -> ClaudeInstance | None:
+        """Pick the Claude window the bot should now talk to.
+
+        Priority:
+          (a) match recorded session_id against each candidate's
+              live session_id (via pid_session_resolver).
+          (b) most-recent JSONL mtime.
+          (c) lowest tmux window_index (list_windows order).
+        """
+        try:
+            tm = self._tmux_registry.get_or_create(instance_id)
+            windows = await tm.list_windows()
+        except Exception:
+            logger.exception("reconcile_instance: list_windows failed")
+            return None
+
+        proc_names = _claude_proc_names()
+        candidates = [w for w in windows if w.pane_current_command in proc_names]
+        if not candidates:
+            return None
+
+        recorded = self._registry.get(instance_id)
+        recorded_sid = recorded.session_id if recorded else ""
+
+        # Resolve (session_id, cwd) per candidate.
+        resolved: list[tuple[TmuxWindow, tuple[str, str] | None]] = []
+        for w in candidates:
+            pane_id = await self._active_pane_id(w.window_id)
+            r = _resolve_via_pane(pane_id) if pane_id else None
+            resolved.append((w, r))
+
+        # (a) recorded session_id match
+        if recorded_sid:
+            for w, r in resolved:
+                if r is not None and r[0] == recorded_sid:
+                    return ClaudeInstance(
+                        instance_id=instance_id,
+                        window_id=w.window_id,
+                        session_id=r[0],
+                        cwd=r[1],
+                    )
+
+        # (b) most-recent JSONL mtime
+        scored: list[tuple[float, TmuxWindow, tuple[str, str]]] = []
+        for w, r in resolved:
+            if r is None:
+                continue
+            sid, cwd = r
+            jsonl = (
+                Path.home()
+                / ".claude"
+                / "projects"
+                / cwd.replace("/", "-").replace("_", "-").replace(".", "-")
+                / f"{sid}.jsonl"
+            )
+            try:
+                mtime = jsonl.stat().st_mtime
+            except OSError:
+                continue
+            scored.append((mtime, w, r))
+        if scored:
+            scored.sort(key=lambda t: t[0], reverse=True)
+            _, w, (sid, cwd) = scored[0]
+            return ClaudeInstance(
+                instance_id=instance_id,
+                window_id=w.window_id,
+                session_id=sid,
+                cwd=cwd,
+            )
+
+        # (c) lowest tmux window_index — list_windows preserves that order
+        w0 = candidates[0]
+        for w, r in resolved:
+            if w.window_id == w0.window_id and r is not None:
+                return ClaudeInstance(
+                    instance_id=instance_id,
+                    window_id=w.window_id,
+                    session_id=r[0],
+                    cwd=r[1],
+                )
+        # Resolver gave no info for w0; fall back to recorded values
+        # so message_monitor at least has *something* to track.
+        return ClaudeInstance(
+            instance_id=instance_id,
+            window_id=w0.window_id,
+            session_id=recorded_sid,
+            cwd=recorded.cwd if recorded else "",
+        )
+
+    async def _active_pane_id(self, window_id: str) -> str:
+        """Return the `%N` pane id of the active pane in `window_id`."""
+        tm = self._tmux_registry.get_by_window_id(window_id)
+        if tm is None:
+            return ""
+        return await tm.active_pane_id(window_id)
 
     # --- Lifecycle ---------------------------------------------------
 

@@ -234,6 +234,24 @@ class TmuxSession:
         logger.debug("Window not found by id: %s", window_id)
         return None
 
+    async def active_pane_id(self, window_id: str) -> str:
+        """Return the `%N` pane id of the active pane in `window_id`.
+
+        Empty string if the session or window doesn't exist.
+        """
+
+        def _sync() -> str:
+            session = self.get_session()
+            if not session:
+                return ""
+            for window in session.windows:
+                if (window.window_id or "") == window_id:
+                    pane = window.active_pane
+                    return (pane.pane_id or "") if pane else ""
+            return ""
+
+        return await asyncio.to_thread(_sync)
+
     async def capture_pane(self, window_id: str, with_ansi: bool = False) -> str | None:
         """Capture the visible text content of a window's active pane.
 
