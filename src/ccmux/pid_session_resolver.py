@@ -79,56 +79,41 @@ def _find_claude_pid(shell_pid: int) -> int | None:
     return None
 
 
-def _open_jsonl_session_id(pid: int) -> str | None:
-    """Return the session_id of the JSONL file currently held open by `pid`.
+def _session_id_by_mtime(pid: int, launch_cwd: str) -> str | None:
+    """Pick the JSONL this pid is actively writing to via mtime correlation.
 
-    Linux: read ``/proc/<pid>/fd``. macOS: shell out to ``lsof -p``. Picks
-    the platform purely on whether ``/proc`` exists; never falls back
-    across platforms. Returns None if no matching JSONL is open or the
-    lookup fails.
+    ``~/.claude/sessions/<pid>.json`` carries an ``updatedAt`` field that
+    Claude bumps on activity. The active JSONL in
+    ``~/.claude/projects/<encoded-cwd>/`` has an mtime that tracks the
+    same timestamp, so the correct session_id for this pid is the JSONL
+    whose mtime is closest to ``updatedAt``. Works on Linux and macOS
+    alike (no /proc-fd or lsof; Bun-compiled Claude on macOS doesn't
+    keep its JSONL open between writes, so fd-based lookups miss).
     """
-    if Path("/proc").is_dir():
-        # Linux path
-        proc_fd = Path(f"/proc/{pid}/fd")
-        try:
-            for fd_link in proc_fd.iterdir():
-                try:
-                    target = os.readlink(str(fd_link))
-                except OSError:
-                    continue
-                name = Path(target).name
-                if (
-                    name.endswith(".jsonl")
-                    and "/.claude/projects/" in target
-                    and _SESSION_FILE_RE.match(name)
-                ):
-                    return name[: -len(".jsonl")]
-        except OSError:
-            pass
-        return None
-
-    # macOS / no-/proc path: lsof
+    sessions_file = Path.home() / ".claude" / "sessions" / f"{pid}.json"
     try:
-        result = subprocess.run(
-            ["lsof", "-p", str(pid), "-Fn"],
-            capture_output=True,
-            text=True,
-        )
+        info = json.loads(sessions_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    updated_at_ms = info.get("updatedAt")
+    if not isinstance(updated_at_ms, (int, float)):
+        return None
+    target_mtime = updated_at_ms / 1000.0
+
+    project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
+    try:
+        candidates = [
+            p
+            for p in project_dir.iterdir()
+            if p.is_file() and _SESSION_FILE_RE.match(p.name)
+        ]
     except OSError:
         return None
-    if result.returncode != 0:
+    if not candidates:
         return None
-    for line in result.stdout.splitlines():
-        if not line.startswith("n"):
-            continue
-        path = line[1:]
-        if (
-            path.endswith(".jsonl")
-            and "/.claude/projects/" in path
-            and _SESSION_FILE_RE.match(Path(path).name)
-        ):
-            return Path(path).stem
-    return None
+
+    best = min(candidates, key=lambda p: abs(p.stat().st_mtime - target_mtime))
+    return best.stem
 
 
 def resolve_for_pane(pane_id: str) -> tuple[str, str] | None:
@@ -170,16 +155,14 @@ def resolve_for_pane(pane_id: str) -> tuple[str, str] | None:
     if not launch_cwd or not os.path.isabs(launch_cwd):
         return None
 
-    # Prefer the JSONL this pid actually has open. That's the only way
-    # to disambiguate when multiple Claude windows share the same cwd
-    # (and therefore the same project dir).
-    open_sid = _open_jsonl_session_id(claude_pid)
-    if open_sid is not None:
-        return open_sid, launch_cwd
+    # Disambiguate via mtime correlation between sessions/<pid>.json
+    # updatedAt and project-dir JSONL mtimes. Works across multiple
+    # Claudes sharing the same cwd.
+    sid = _session_id_by_mtime(claude_pid, launch_cwd)
+    if sid is not None:
+        return sid, launch_cwd
 
-    # Fallback: newest jsonl in the project dir. Imprecise when more
-    # than one Claude shares the cwd, but matches the legacy hook
-    # behavior for the empty-stdin path.
+    # Last-resort fallback: newest jsonl in the project dir.
     project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
     try:
         candidates = [
