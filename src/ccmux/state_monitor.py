@@ -6,12 +6,14 @@ Two ticks:
 - ``fast_tick()`` — called at ``config.monitor_poll_interval``. For each
   instance, captures its pane, classifies into
   ``Working / Idle / Blocked``, emits via ``on_state``. Silent skip
-  when the window is gone or capture returns empty.
+  when the window is gone or capture returns empty. **Bindings are
+  classified concurrently via ``asyncio.gather``** so the per-tick
+  latency is bounded by the slowest tmux query, not the sum.
 - ``slow_tick()`` — called at ``slow_interval`` (default 60s). For each
   instance, probes ``pane_current_command``; emits ``Dead()`` when
   tmux is alive but the foreground process is no longer ``claude`` /
   ``node``. Auto-resume is the backend's responsibility — this module
-  only reports.
+  only reports. Also gathered concurrently.
 
 The monitor keeps no state between ticks. Each emission is a fresh
 observation.
@@ -19,6 +21,7 @@ observation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Awaitable, Callable, TYPE_CHECKING
@@ -65,27 +68,53 @@ class StateMonitor:
         self._on_state = on_state
 
     async def fast_tick(self) -> None:
-        """Classify each live binding from its pane text; emit or skip."""
-        for b in list(self._event_reader.all_alive()):
-            try:
-                state = await self._classify_from_pane(b)
-            except Exception as e:
+        """Classify each live binding from its pane text; emit or skip.
+
+        Classifications run concurrently via ``asyncio.gather`` so a
+        single slow tmux query doesn't stall the rest. tmux helpers in
+        ``ccmux.tmux`` already use ``asyncio.to_thread``, so concurrent
+        ``capture_pane`` calls really run in parallel on the thread
+        pool rather than serialising on the event loop.
+        """
+        bindings = list(self._event_reader.all_alive())
+        if not bindings:
+            return
+        results = await asyncio.gather(
+            *(self._classify_from_pane(b) for b in bindings),
+            return_exceptions=True,
+        )
+        for b, result in zip(bindings, results):
+            if isinstance(result, Exception):
                 logger.debug(
-                    "fast_tick classify error for %s: %s", b.tmux_session_name, e
+                    "fast_tick classify error for %s: %s",
+                    b.tmux_session_name,
+                    result,
                 )
                 continue
-            if state is not None:
-                await self._on_state(b.tmux_session_name, state)
+            if result is not None:
+                await self._on_state(b.tmux_session_name, result)
 
     async def slow_tick(self) -> None:
-        """Probe each binding's foreground process; emit Dead when needed."""
-        for b in list(self._event_reader.all_alive()):
-            try:
-                dead = await self._probe_dead(b)
-            except Exception as e:
-                logger.debug("slow_tick probe error for %s: %s", b.tmux_session_name, e)
+        """Probe each binding's foreground process; emit Dead when needed.
+
+        Probes run concurrently via ``asyncio.gather``.
+        """
+        bindings = list(self._event_reader.all_alive())
+        if not bindings:
+            return
+        results = await asyncio.gather(
+            *(self._probe_dead(b) for b in bindings),
+            return_exceptions=True,
+        )
+        for b, result in zip(bindings, results):
+            if isinstance(result, Exception):
+                logger.debug(
+                    "slow_tick probe error for %s: %s",
+                    b.tmux_session_name,
+                    result,
+                )
                 continue
-            if dead:
+            if result:
                 await self._on_state(b.tmux_session_name, Dead())
 
     # ------------------------------------------------------------------
