@@ -9,6 +9,93 @@ require a major bump.
 
 ## [Unreleased]
 
+## 4.0.0 — 2026-04-28
+
+Layer 2 (tmux session ↔ Claude instance) is rebuilt around an
+append-only event log. The v3 registry, override layer, and
+`reconcile_instance` resolver are deleted. Stale `window_id` and
+stale `cwd` failure modes (the v3.1.x hotfix drivers) self-heal on
+the next hook fire.
+
+### Changed (BREAKING)
+
+- `ccmux hook --install` now registers two events: `SessionStart`
+  and `UserPromptSubmit`. Run `ccmux hook --install` on upgrade so
+  `~/.claude/settings.json` picks up the second hook.
+
+- `~/.ccmux/claude_instances.json` (and its `.lock` companion) is no
+  longer written. Backend reads `~/.ccmux/claude_events.jsonl`
+  exclusively. Old file is harmless on disk; safe to delete.
+
+- `ClaudeInstance` renamed to `CurrentClaudeBinding`. Field
+  `session_id` → `claude_session_id` (disambiguates from tmux's own
+  `session_id`). New fields: `tmux_session_name`, `transcript_path`,
+  `last_seen`.
+
+- `ClaudeInstanceRegistry` removed. `Backend.claude_instances`
+  accessor removed. `set_override` / `clear_override` removed. Use
+  `Backend.event_reader` (an `EventLogReader`) for all binding
+  queries.
+
+- `Backend.reconcile_instance` removed. The reader is always live;
+  there is nothing to reconcile against.
+
+- `pid_session_resolver` public module removed. Its helpers fold
+  back into `hook.py` as private functions, kept only for the
+  empty-stdin fallback path.
+
+- `DefaultBackend.__init__` constructor signature changed:
+  `(tmux_registry, message_monitor=None, slow_interval=60.0,
+  show_user_messages=None, *, event_reader=None)`. The legacy
+  positional `registry` parameter is gone.
+
+### Added
+
+- `ccmux.api.EventLogReader` — async polling reader over the event
+  log. Tail-reads new bytes since last offset and projects to
+  `dict[tmux_session_name, CurrentClaudeBinding]` with
+  last-event-wins semantics. `start()` / `stop()` for the async
+  poll loop, `get(name)` / `all_alive()` / `refresh()` for queries.
+
+- `ccmux.api.CurrentClaudeBinding` dataclass.
+
+- `ccmux.api.HookEvent` / `EventLogWriter` / `TmuxInfo` /
+  `ClaudeInfo` — schema for hook authors and tests building
+  synthetic logs. `EventLogWriter` uses a single `O_APPEND`
+  `os.write()` syscall per event line; POSIX guarantees atomic
+  appends across concurrent processes for lines `<= PIPE_BUF`
+  (4 KB). No fcntl needed.
+
+- `Backend.event_reader: EventLogReader` accessor on the protocol.
+
+### Removed
+
+- File: `~/.ccmux/claude_instances.json`, `~/.ccmux/claude_instances.lock`.
+- API: `ClaudeInstance`, `ClaudeInstanceRegistry`,
+  `Backend.reconcile_instance`, `Backend.claude_instances`,
+  `set_override`, `clear_override`, `pid_session_resolver` module.
+
+### Migration
+
+There is no automatic migration. On upgrade:
+
+1. Run `ccmux hook --install` to register the new event handler.
+2. The first `SessionStart` or `UserPromptSubmit` from each Claude
+   repopulates the event log organically. Already-running Claude
+   sessions need to be `/clear`'d, exited, or auto-resumed for
+   their hook events to start firing.
+3. If you bridge Telegram via `ccmux-telegram`, upgrade it to
+   `>=4.0.0` in lockstep.
+
+For an on-the-fly bootstrap from an existing
+`~/.ccmux/claude_instances.json`, write one synthetic `SessionStart`
+event per row to `~/.ccmux/claude_events.jsonl`. See the design doc
+for the schema.
+
+### Spec
+
+`docs/superpowers/specs/2026-04-28-event-log-self-heal-design.md`.
+
 ## 3.1.3 — 2026-04-28
 
 ### Changed

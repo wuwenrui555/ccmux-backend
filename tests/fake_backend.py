@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from ccmux.claude_instance import ClaudeInstance, ClaudeSession
+from ccmux.claude_files import ClaudeSession
+from ccmux.event_log import CurrentClaudeBinding
 from ccmux.claude_state import ClaudeState
 from ccmux.claude_transcript_parser import ClaudeMessage
 from ccmux.tmux import TmuxWindow
@@ -66,7 +67,7 @@ class FakeBackend:
     """In-memory double for the new Backend Protocol."""
 
     calls: list[tuple[str, tuple, dict]] = field(default_factory=list)
-    instances: dict[str, ClaudeInstance] = field(default_factory=dict)
+    instances: dict[str, CurrentClaudeBinding] = field(default_factory=dict)
     pane_text: dict[str, str] = field(default_factory=dict)
     claude_sessions: dict[str, list[ClaudeSession]] = field(default_factory=dict)
     history: dict[str, list[dict]] = field(default_factory=dict)
@@ -84,7 +85,7 @@ class FakeBackend:
     def _record(self, name: str, *args, **kwargs) -> None:
         self.calls.append((name, args, kwargs))
 
-    def get_instance(self, instance_id: str) -> ClaudeInstance | None:
+    def get_instance(self, instance_id: str) -> CurrentClaudeBinding | None:
         self._record("get_instance", instance_id)
         return self.instances.get(instance_id)
 

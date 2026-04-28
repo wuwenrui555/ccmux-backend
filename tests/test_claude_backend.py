@@ -9,17 +9,29 @@ cancels the internal tasks cleanly with no leaked pending tasks.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ccmux.backend import DefaultBackend
-from ccmux.claude_instance import ClaudeInstance
 from ccmux.claude_transcript_parser import ClaudeMessage
+from ccmux.event_log import CurrentClaudeBinding, EventLogReader
+
+
+def _binding(name: str = "proj") -> CurrentClaudeBinding:
+    return CurrentClaudeBinding(
+        tmux_session_name=name,
+        window_id="@5",
+        claude_session_id="uuid",
+        cwd="/tmp",
+        transcript_path="",
+        last_seen=datetime(2026, 4, 28, tzinfo=timezone.utc),
+    )
 
 
 @pytest.mark.asyncio
-async def test_backend_start_dispatches_on_message():
+async def test_backend_start_dispatches_on_message(tmp_path):
     stub_message = ClaudeMessage(
         session_id="test-session",
         role="assistant",
@@ -34,17 +46,13 @@ async def test_backend_start_dispatches_on_message():
     message_monitor.shutdown = MagicMock()
 
     tmux_registry = MagicMock()
-    registry = MagicMock()
-    registry.load = AsyncMock()
-    # StateMonitor iterates registry.all(); we don't want any state emissions
-    # in this smoke test.
-    registry.all = MagicMock(return_value=iter([]))
+    reader = EventLogReader(tmp_path / "claude_events.jsonl")
 
     backend = DefaultBackend(
         tmux_registry=tmux_registry,
-        registry=registry,
         message_monitor=message_monitor,
         slow_interval=3600.0,
+        event_reader=reader,
     )
 
     on_state = AsyncMock()
@@ -65,26 +73,25 @@ async def test_backend_start_dispatches_on_message():
 
 
 @pytest.mark.asyncio
-async def test_backend_get_instance_delegates_to_registry():
-    """get_instance just passes through to ClaudeInstanceRegistry.get."""
+async def test_backend_get_instance_delegates_to_event_reader(tmp_path):
+    """get_instance just passes through to EventLogReader.get."""
     tmux_registry = MagicMock()
-    registry = MagicMock()
-    registry.load = AsyncMock()
-    expected = ClaudeInstance(
-        instance_id="proj", window_id="@5", session_id="uuid", cwd="/tmp"
-    )
-    registry.get = MagicMock(return_value=expected)
+    expected = _binding("proj")
+    reader = MagicMock()
+    reader.get = MagicMock(return_value=expected)
+    reader.start = AsyncMock()
+    reader.stop = AsyncMock()
 
-    backend = DefaultBackend(tmux_registry=tmux_registry, registry=registry)
+    backend = DefaultBackend(tmux_registry=tmux_registry, event_reader=reader)
 
     result = backend.get_instance("proj")
 
     assert result is expected
-    registry.get.assert_called_once_with("proj")
+    reader.get.assert_called_once_with("proj")
 
 
 @pytest.mark.asyncio
-async def test_backend_send_text_delegates_to_registry():
+async def test_backend_send_text_delegates_to_registry(tmp_path):
     """send_text finds the TmuxSession via registry and sends keys."""
     mock_tm = MagicMock()
     mock_window = MagicMock()
@@ -95,10 +102,9 @@ async def test_backend_send_text_delegates_to_registry():
     mock_registry = MagicMock()
     mock_registry.get_by_window_id.return_value = mock_tm
 
-    instance_registry = MagicMock()
-    instance_registry.load = AsyncMock()
+    reader = EventLogReader(tmp_path / "claude_events.jsonl")
 
-    backend = DefaultBackend(tmux_registry=mock_registry, registry=instance_registry)
+    backend = DefaultBackend(tmux_registry=mock_registry, event_reader=reader)
 
     ok, msg = await backend.tmux.send_text("@3", "hello")
 
