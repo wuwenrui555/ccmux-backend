@@ -21,14 +21,13 @@ import logging
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
-from .claude_files import ClaudeFileResolver
-from .claude_instance import ClaudeInstance, ClaudeInstanceRegistry, ClaudeSession
+from .claude_files import ClaudeFileResolver, ClaudeSession, _encode_cwd
 from .claude_state import ClaudeState, Dead
 from .claude_transcript_parser import ClaudeMessage
 from .config import config
+from .event_log import CurrentClaudeBinding, EventLogReader
 from .message_monitor import MessageMonitor
-from .pid_session_resolver import resolve_for_pane as _resolve_via_pane
-from .state_monitor import StateMonitor, _claude_proc_names
+from .state_monitor import StateMonitor
 from .tmux import TmuxSessionRegistry, TmuxWindow
 
 logger = logging.getLogger(__name__)
@@ -56,16 +55,14 @@ class ClaudeOps(Protocol):
 class Backend(Protocol):
     tmux: TmuxOps
     claude: ClaudeOps
-    claude_instances: ClaudeInstanceRegistry
+    event_reader: EventLogReader
 
-    def get_instance(self, instance_id: str) -> ClaudeInstance | None: ...
+    def get_instance(self, instance_id: str) -> CurrentClaudeBinding | None:
+        """Return the current binding for the given tmux session name.
 
-    async def reconcile_instance(self, instance_id: str) -> ClaudeInstance | None:
-        """Compute the ClaudeInstance the bot should now talk to for
-        ``instance_id``, derived from current tmux state.
-
-        Pure read; no writes, no override mutations. Caller applies the
-        result via ``ClaudeInstanceRegistry.set_override``.
+        Derived from the event log; no fallback. ``None`` when no Claude
+        has ever been observed in that tmux session (or the tmux session
+        is gone).
         """
         ...
 
@@ -123,7 +120,7 @@ class _ClaudeOpsImpl:
         self._files = files
 
     async def list_sessions(self, cwd: str) -> list[ClaudeSession]:
-        encoded = ClaudeInstanceRegistry.encode_cwd(cwd)
+        encoded = _encode_cwd(cwd)
         project_dir = config.claude_projects_path / encoded
         if not project_dir.exists():
             return []
@@ -174,16 +171,23 @@ class DefaultBackend:
     def __init__(
         self,
         tmux_registry: TmuxSessionRegistry,
-        registry: ClaudeInstanceRegistry,
         message_monitor: MessageMonitor | None = None,
         slow_interval: float = 60.0,
         show_user_messages: bool | None = None,
+        *,
+        event_reader: EventLogReader | None = None,
     ) -> None:
         self._tmux_registry = tmux_registry
-        self._registry = registry
-        self._files = ClaudeFileResolver(registry)
+
+        if event_reader is None:
+            from .util import ccmux_dir
+
+            event_reader = EventLogReader(ccmux_dir() / "claude_events.jsonl")
+        self.event_reader: EventLogReader = event_reader
+
+        self._files = ClaudeFileResolver()
         self._message_monitor = message_monitor or MessageMonitor(
-            registry=registry,
+            event_reader=self.event_reader,
             show_user_messages=show_user_messages,
         )
         self._slow_interval = slow_interval
@@ -193,95 +197,11 @@ class DefaultBackend:
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
-        # Public alias of self._registry — exposed so frontends can call
-        # set_override / clear_override on reconcile results.
-        self.claude_instances: ClaudeInstanceRegistry = self._registry
 
     # --- Queries -----------------------------------------------------
 
-    def get_instance(self, instance_id: str) -> ClaudeInstance | None:
-        return self._registry.get(instance_id)
-
-    async def reconcile_instance(self, instance_id: str) -> ClaudeInstance | None:
-        """Pick the Claude window the bot should now talk to.
-
-        The override layer is for fixing **stale ``window_id``**, not
-        for inventing ``session_id`` values. Reconcile therefore never
-        propagates the resolver's session_id guess; ``session_id`` only
-        comes from the recorded file entry. The resolver is consulted
-        purely as a *predicate* — does this candidate's live session_id
-        match what we recorded? — to follow a Claude that migrated to a
-        new window via ``claude --resume`` (same session_id, new pid /
-        new window).
-
-        Priority:
-          (1) **Fast path:** recorded ``window_id`` still alive →
-              return recorded verbatim.
-          (2) **session_id match:** scan candidates; if any has a live
-              session_id equal to the recorded one, pick that window
-              and preserve recorded session_id.
-          (3) **Fallback:** lowest tmux ``window_index`` among live
-              candidates, preserve recorded session_id (or empty).
-        """
-        try:
-            tm = self._tmux_registry.get_or_create(instance_id)
-            windows = await tm.list_windows()
-        except Exception:
-            logger.exception("reconcile_instance: list_windows failed")
-            return None
-
-        proc_names = _claude_proc_names()
-        candidates = [w for w in windows if w.pane_current_command in proc_names]
-        if not candidates:
-            return None
-
-        recorded = self._registry.get(instance_id)
-        recorded_sid = recorded.session_id if recorded else ""
-        recorded_cwd = recorded.cwd if recorded else ""
-
-        # (1) Fast path: recorded window still alive → return as-is.
-        if recorded and recorded.window_id:
-            for w in candidates:
-                if w.window_id == recorded.window_id:
-                    return recorded
-
-        # (2) session_id match: walk candidates, ask resolver "is this
-        # Claude's current session_id the recorded one?". If so, pick.
-        if recorded_sid:
-            for w in candidates:
-                pane_id = await self._active_pane_id(w.window_id)
-                if not pane_id:
-                    continue
-                r = _resolve_via_pane(pane_id)
-                if r is not None and r[0] == recorded_sid:
-                    return ClaudeInstance(
-                        instance_id=instance_id,
-                        window_id=w.window_id,
-                        session_id=recorded_sid,
-                        cwd=recorded_cwd or r[1],
-                    )
-
-        # (3) Fallback: lowest window_index, preserve recorded session_id.
-        # We deliberately do NOT look up the new window's session_id —
-        # the resolver's mtime correlation is unreliable when multiple
-        # Claudes share a cwd, and getting it wrong would steer the bot's
-        # message_monitor at the wrong JSONL. Empty session_id means
-        # message_monitor won't track this binding's outputs until the
-        # hook fires (next SessionStart) and updates the file.
-        w0 = candidates[0]
-        return ClaudeInstance(
-            instance_id=instance_id,
-            window_id=w0.window_id,
-            session_id=recorded_sid,
-            cwd=recorded_cwd,
-        )
-
-    async def _active_pane_id(self, window_id: str) -> str:
-        """Return the `%N` pane id of the active pane in `window_id`."""
-        tm = self._tmux_registry.get_by_window_id(window_id)
-        if tm is None:
-            return ""
-        return await tm.active_pane_id(window_id)
+    def get_instance(self, instance_id: str) -> CurrentClaudeBinding | None:
+        return self.event_reader.get(instance_id)
 
     # --- Lifecycle ---------------------------------------------------
 
@@ -290,6 +210,9 @@ class DefaultBackend:
         on_state: Callable[[str, ClaudeState], Awaitable[None]],
         on_message: Callable[[str, ClaudeMessage], Awaitable[None]],
     ) -> None:
+        # Reader's initial refresh runs synchronously here; the poll task
+        # spawned by start() then tails new appends.
+        await self.event_reader.start()
         self._message_monitor.startup_cleanup()
 
         async def on_state_with_resume(instance_id: str, state: ClaudeState) -> None:
@@ -304,7 +227,7 @@ class DefaultBackend:
                     logger.warning("auto-resume failed for %s: %s", instance_id, e)
 
         state_monitor = StateMonitor(
-            registry=self._registry,
+            event_reader=self.event_reader,
             tmux_registry=self._tmux_registry,
             on_state=on_state_with_resume,
         )
@@ -316,7 +239,6 @@ class DefaultBackend:
             )
             while True:
                 try:
-                    await self._registry.load()
                     new_pairs, _ = await asyncio.gather(
                         self._message_monitor.poll(),
                         state_monitor.fast_tick(),
@@ -361,6 +283,7 @@ class DefaultBackend:
             logger.info("%s poll loop stopped", name)
         self._fast_task = None
         self._slow_task = None
+        await self.event_reader.stop()
 
         try:
             self._message_monitor.shutdown()
@@ -375,24 +298,28 @@ class DefaultBackend:
             return
         self._resuming.add(instance_id)
         try:
-            inst = self._registry.get(instance_id)
-            if inst is None:
+            binding = self.event_reader.get(instance_id)
+            if binding is None:
                 return
-            cwd = inst.cwd or str(Path.home())
+            cwd = binding.cwd or str(Path.home())
             logger.info(
                 "Attempting to resume Claude session %s in instance %s (cwd=%s)",
-                inst.session_id,
+                binding.claude_session_id,
                 instance_id,
                 cwd,
             )
             tm = self._tmux_registry.get_or_create(instance_id)
             ok, msg, _, new_wid = await tm.create_window(
-                work_dir=cwd, resume_session_id=inst.session_id
+                work_dir=cwd, resume_session_id=binding.claude_session_id
             )
             if ok:
-                logger.info("Resumed %s in window %s", inst.session_id, new_wid)
+                logger.info(
+                    "Resumed %s in window %s", binding.claude_session_id, new_wid
+                )
             else:
-                logger.warning("Failed to resume %s: %s", inst.session_id, msg)
+                logger.warning(
+                    "Failed to resume %s: %s", binding.claude_session_id, msg
+                )
         finally:
             self._resuming.discard(instance_id)
 

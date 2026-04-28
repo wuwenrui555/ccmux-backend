@@ -21,11 +21,11 @@ Everything below is exported from `ccmux.api`. Anything imported from submodules
 
 ### Lifecycle
 
-- `Backend` — Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols, and a `claude_instances: ClaudeInstanceRegistry` accessor.
+- `Backend` — Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols, and an `event_reader: EventLogReader` accessor.
 - `TmuxOps` — Tmux-side operations sub-protocol.
 - `ClaudeOps` — Claude-side operations sub-protocol.
-- `DefaultBackend` — Default `Backend` implementation; compose with `tmux_registry` and a `ClaudeInstanceRegistry`.
-- `Backend.reconcile_instance(instance_id)` — Async, pure read. Returns the `ClaudeInstance` the caller should now bind to (or `None` if no Claude lives in the named tmux session). Frontends apply the result via `claude_instances.set_override`.
+- `DefaultBackend` — Default `Backend` implementation; compose with `tmux_registry` and an `EventLogReader`.
+- `Backend.get_instance(instance_id)` — Returns the current `CurrentClaudeBinding` for a tmux session (derived live from the event log). `None` when no Claude has been observed in that tmux session.
 - `get_default_backend` / `set_default_backend` — Process-wide singleton accessors.
 
 ### State
@@ -39,12 +39,12 @@ Everything below is exported from `ccmux.api`. Anything imported from submodules
 - `ClaudeMessage` — One parsed message; `text` is standard CommonMark.
 - `TranscriptParser` — JSONL → `ClaudeMessage` stream; thinking, tool_result, and long output go inside `>` blockquotes for collapsible-UI rendering.
 
-### Instances
+### Bindings (event log)
 
-- `ClaudeInstance` — Backend view of one running Claude Code process (`instance_id`, `window_id`, `session_id`, `cwd`).
-- `ClaudeInstanceRegistry` — Persistent `instance_id → ClaudeInstance` map at `~/.ccmux/claude_instances.json`; populated by the `ccmux hook` CLI on Claude Code `SessionStart`. Layered with an in-memory override so frontends can correct stale `window_id`s discovered by `reconcile_instance` without touching the file (still hook-owned).
-  - `set_override(instance_id, instance)` — install or replace an in-memory override; wins over the file value for `get` / `get_by_window_id` / `find_by_session_id` / `contains` / `all`.
-  - `clear_override(instance_id)` — drop the override; `get` reverts to the file value.
+- `CurrentClaudeBinding` — Backend view of the current Claude in a tmux session (`tmux_session_name`, `window_id`, `claude_session_id`, `cwd`, `transcript_path`, `last_seen`).
+- `EventLogReader` — Tails `~/.ccmux/claude_events.jsonl` and projects to `dict[tmux_session_name, CurrentClaudeBinding]`. Last-event-wins per tmux session, so `/clear` and tmux-continuum-style respawns self-heal on the next hook fire (no manual reconcile, no override layer).
+  - `get(name)` / `all_alive()` / `refresh()` for queries; `start()` / `stop()` for the async poll loop.
+- `EventLogWriter` / `HookEvent` / `TmuxInfo` / `ClaudeInfo` — Schema for hook authors and tests building synthetic logs.
 - `ClaudeSession` — Summary of a Claude Code JSONL session file (`session_id`, `summary`, `message_count`, `file_path`).
 
 ### Tmux
@@ -128,7 +128,7 @@ A minimal frontend looks like:
 ```python
 import asyncio
 from ccmux.api import (
-    DefaultBackend, ClaudeInstanceRegistry, tmux_registry,
+    DefaultBackend, tmux_registry,
     ClaudeMessage, ClaudeState,
 )
 
@@ -139,10 +139,7 @@ async def on_state(instance_id: str, state: ClaudeState) -> None:
     print(f"[{instance_id}] state -> {state}")
 
 async def main() -> None:
-    backend = DefaultBackend(
-        tmux_registry=tmux_registry,
-        claude_instances=ClaudeInstanceRegistry(),
-    )
+    backend = DefaultBackend(tmux_registry=tmux_registry)
     await backend.start(on_state=on_state, on_message=on_message)
     try:
         await asyncio.Event().wait()
@@ -170,7 +167,7 @@ Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env`
 
 ### Backend
 
-- `claude_instances.json` / `claude_instances.lock` — instance registry; written by the `ccmux hook` CLI on Claude Code `SessionStart`
+- `claude_events.jsonl` — append-only event log; written by the `ccmux hook` CLI on `SessionStart` and `UserPromptSubmit`. Backend's `EventLogReader` projects this to the active `(tmux_session_name → CurrentClaudeBinding)` map.
 - `claude_monitor.json` — per-session JSONL byte offsets, written by `MessageMonitor`
 - `drift.log` — created on first pane-parser drift warning (Claude Code UI change alert)
 - `hook.log` — appended by the `ccmux hook` CLI on every invocation; captures unhandled tracebacks for postmortems after Claude Code's inline error banner scrolls away

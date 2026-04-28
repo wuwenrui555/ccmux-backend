@@ -12,12 +12,12 @@ import pytest
 import ccmux.api as api
 from ccmux.api import (
     Backend,
-    ClaudeInstance,
-    ClaudeInstanceRegistry,
     ClaudeMessage,
     ClaudeSession,
     ClaudeState,
+    CurrentClaudeBinding,
     DefaultBackend,
+    EventLogReader,
     InteractiveUIContent,
     TmuxSessionRegistry,
     TmuxWindow,
@@ -54,10 +54,15 @@ EXPECTED_EXPORTS = {
     # Message / transcript
     "ClaudeMessage",
     "TranscriptParser",
-    # Instance model
-    "ClaudeInstance",
-    "ClaudeInstanceRegistry",
+    # Session summary
     "ClaudeSession",
+    # Event log
+    "CurrentClaudeBinding",
+    "EventLogReader",
+    "EventLogWriter",
+    "HookEvent",
+    "TmuxInfo",
+    "ClaudeInfo",
     # Composition inputs
     "TmuxSessionRegistry",
     # Parser surfaces
@@ -125,16 +130,20 @@ class TestFakeBackendSatisfiesProtocol:
 class TestDefaultBackendConstruction:
     def test_construct_minimal(self, tmp_path) -> None:
         reg = TmuxSessionRegistry()
-        registry = ClaudeInstanceRegistry(map_file=tmp_path / "claude_instances.json")
-        backend = DefaultBackend(tmux_registry=reg, registry=registry)
+        backend = DefaultBackend(
+            tmux_registry=reg,
+            event_reader=EventLogReader(tmp_path / "claude_events.jsonl"),
+        )
         assert backend.tmux is not None
         assert backend.claude is not None
 
     @pytest.mark.asyncio
     async def test_start_stop_idempotent_on_stop(self, tmp_path) -> None:
         reg = TmuxSessionRegistry()
-        registry = ClaudeInstanceRegistry(map_file=tmp_path / "claude_instances.json")
-        backend = DefaultBackend(tmux_registry=reg, registry=registry)
+        backend = DefaultBackend(
+            tmux_registry=reg,
+            event_reader=EventLogReader(tmp_path / "claude_events.jsonl"),
+        )
 
         async def noop_state(instance_id: str, state: ClaudeState) -> None:
             pass
@@ -243,8 +252,16 @@ class TestDataclassShapes:
         u = UsageInfo(parsed_lines=["a", "b"])
         assert u.parsed_lines == ["a", "b"]
 
-    def test_claude_instance_fields(self) -> None:
-        inst = ClaudeInstance(
-            instance_id="inst1", window_id="@1", session_id="sid", cwd="/tmp"
+    def test_current_claude_binding_fields(self) -> None:
+        from datetime import datetime, timezone
+
+        b = CurrentClaudeBinding(
+            tmux_session_name="ccmux",
+            window_id="@1",
+            claude_session_id="sid",
+            cwd="/tmp",
+            transcript_path="/p/sid.jsonl",
+            last_seen=datetime(2026, 4, 28, tzinfo=timezone.utc),
         )
-        assert inst.cwd == "/tmp"
+        assert b.cwd == "/tmp"
+        assert b.tmux_session_name == "ccmux"

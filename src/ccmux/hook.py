@@ -1,8 +1,9 @@
 """Hook subcommand for Claude Code session tracking.
 
-Called by Claude Code's SessionStart hook to maintain a window ↔ session
-mapping in <CCMUX_DIR>/claude_instances.json. Also provides `--install` to
-auto-configure the hook in ~/.claude/settings.json.
+Called by Claude Code's SessionStart and UserPromptSubmit hooks to
+append one event per fire to ``<CCMUX_DIR>/claude_events.jsonl``.
+Backend's EventLogReader projects this log to the active
+``(tmux_session_name → CurrentClaudeBinding)`` map.
 
 This module deliberately avoids importing `config.py` so the hook stays
 cheap to start from inside a tmux pane (no dotenv load, no env parsing).
@@ -18,25 +19,175 @@ Key functions: hook_main() (CLI entry), _install_hook().
 """
 
 import argparse
-import fcntl
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from .pid_session_resolver import (
-    _PANE_RE,  # noqa: F401  (re-export for tests)
-    _SESSION_FILE_RE,  # noqa: F401
-    _UUID_RE,  # noqa: F401
-    _encode_project_dir,  # noqa: F401
-    _find_claude_pid,  # noqa: F401
-    resolve_for_pane as _resolve_session_via_pid,
-)
-
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Regexes shared with the empty-stdin PID-fallback chain.
+# ---------------------------------------------------------------------------
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_SESSION_FILE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$"
+)
+_PANE_RE = re.compile(r"^%\d+$")
+
+
+def _encode_project_dir(cwd: str) -> str:
+    """Return the `~/.claude/projects/<encoded>` basename for a launch cwd."""
+    return re.sub(r"[/_.]", "-", cwd)
+
+
+def _find_claude_pid(shell_pid: int) -> int | None:
+    """Return the direct `claude` child PID of `shell_pid`, or None.
+
+    Strategy: enumerate direct children via ``pgrep -P``. For each
+    candidate, prefer the Linux signal ``/proc/<pid>/cmdline`` matching
+    ``claude`` (cheap, exact). When ``/proc`` isn't readable -- macOS
+    or restricted Linux -- fall back to a portable signal: a Claude
+    Code instance writes ``~/.claude/sessions/<pid>.json`` on startup,
+    so the presence of that file uniquely identifies it.
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(shell_pid)],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    sessions_dir = Path.home() / ".claude" / "sessions"
+    for token in result.stdout.split():
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+
+        cmdline_path = Path(f"/proc/{pid}/cmdline")
+        try:
+            raw = cmdline_path.read_bytes()
+        except OSError:
+            raw = None
+
+        if raw is not None:
+            argv0 = raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+            if Path(argv0).name == "claude":
+                return pid
+            # On Linux, if cmdline read succeeded but didn't match,
+            # this child is definitely not Claude. Skip the fallback
+            # for this pid.
+            continue
+
+        # Fallback (macOS, or Linux with restricted /proc): does this
+        # child own a Claude sessions file?
+        if (sessions_dir / f"{pid}.json").exists():
+            return pid
+    return None
+
+
+def _session_id_by_mtime(pid: int, launch_cwd: str) -> str | None:
+    """Pick the JSONL this pid is actively writing to via mtime correlation.
+
+    ``~/.claude/sessions/<pid>.json`` carries an ``updatedAt`` field that
+    Claude bumps on activity. The active JSONL in
+    ``~/.claude/projects/<encoded-cwd>/`` has an mtime that tracks the
+    same timestamp, so the correct session_id for this pid is the JSONL
+    whose mtime is closest to ``updatedAt``. Works on Linux and macOS
+    alike.
+    """
+    sessions_file = Path.home() / ".claude" / "sessions" / f"{pid}.json"
+    try:
+        info = json.loads(sessions_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    updated_at_ms = info.get("updatedAt")
+    if not isinstance(updated_at_ms, (int, float)):
+        return None
+    target_mtime = updated_at_ms / 1000.0
+
+    project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
+    try:
+        candidates = [
+            p
+            for p in project_dir.iterdir()
+            if p.is_file() and _SESSION_FILE_RE.match(p.name)
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+
+    best = min(candidates, key=lambda p: abs(p.stat().st_mtime - target_mtime))
+    return best.stem
+
+
+def _resolve_session_via_pid(pane_id: str) -> tuple[str, str] | None:
+    """Recover ``(session_id, launch_cwd)`` for the Claude in ``pane_id``.
+
+    Walks: tmux pane -> shell pid -> claude pid -> launch cwd (stable
+    across /clear) -> session_id via JSONL mtime correlation.
+
+    Used as a fallback when the hook's stdin payload arrives empty or
+    invalid (rare; root cause unidentified).
+    """
+    if not _PANE_RE.match(pane_id):
+        return None
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-t", pane_id, "-p", "#{pane_pid}"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    try:
+        shell_pid = int(result.stdout.strip())
+    except ValueError:
+        return None
+
+    claude_pid = _find_claude_pid(shell_pid)
+    if claude_pid is None:
+        return None
+
+    sessions_file = Path.home() / ".claude" / "sessions" / f"{claude_pid}.json"
+    try:
+        launch_info = json.loads(sessions_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    launch_cwd = launch_info.get("cwd", "")
+    if not launch_cwd or not os.path.isabs(launch_cwd):
+        return None
+
+    sid = _session_id_by_mtime(claude_pid, launch_cwd)
+    if sid is not None:
+        return sid, launch_cwd
+
+    project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
+    try:
+        candidates = [
+            p
+            for p in project_dir.iterdir()
+            if p.is_file() and _SESSION_FILE_RE.match(p.name)
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    return newest.stem, launch_cwd
 
 
 # Claude Code's settings file, where hooks are configured
@@ -73,24 +224,33 @@ def _find_ccmux_path() -> str:
     return "ccmux"
 
 
-def _is_hook_installed(settings: dict) -> bool:
-    """Check if ccmux hook is already installed in Claude Code settings.
+# Events the hook listens for. SessionStart catches new Claudes
+# and continuum-style respawns; UserPromptSubmit refreshes the
+# (tmux session, window, claude session, cwd, transcript) row on
+# every user message, so stale values self-heal between turns.
+_EVENTS_TO_REGISTER = ("SessionStart", "UserPromptSubmit")
+
+
+def _is_hook_installed(settings: dict, event: str = "SessionStart") -> bool:
+    """Check if ccmux hook is already installed for the given event.
 
     Parameters
     ----------
     settings : dict
         Parsed contents of `~/.claude/settings.json`.
+    event : str
+        Hook event key under `settings["hooks"]` to inspect.
 
     Returns
     -------
     bool
-        True if a SessionStart hook command matching `ccmux hook`
-        (or a full path ending with it) is found.
+        True if a hook command matching `ccmux hook` (or a full path
+        ending with it) is found under that event.
     """
     hooks = settings.get("hooks", {})
-    session_start = hooks.get("SessionStart", [])
+    entries = hooks.get(event, [])
 
-    for entry in session_start:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         inner_hooks = entry.get("hooks", [])
@@ -107,8 +267,8 @@ def _is_hook_installed(settings: dict) -> bool:
 def _install_hook() -> int:
     """Install the ccmux hook into Claude Code's settings.json.
 
-    Reads `~/.claude/settings.json`, appends a SessionStart hook entry
-    pointing to the ccmux executable, and writes back.
+    Registers `ccmux hook` under every event in `_EVENTS_TO_REGISTER`,
+    idempotently per event. Existing entries are preserved.
 
     Returns
     -------
@@ -128,25 +288,28 @@ def _install_hook() -> int:
             print(f"Error reading {settings_file}: {e}", file=sys.stderr)
             return 1
 
-    # Check if already installed
-    if _is_hook_installed(settings):
-        logger.info("Hook already installed in %s", settings_file)
-        print(f"Hook already installed in {settings_file}")
-        return 0
-
     # Find the full path to ccmux
     ccmux_path = _find_ccmux_path()
     hook_command = f"{ccmux_path} hook"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
-    logger.info("Installing hook command: %s", hook_command)
 
-    # Install the hook
     if "hooks" not in settings:
         settings["hooks"] = {}
-    if "SessionStart" not in settings["hooks"]:
-        settings["hooks"]["SessionStart"] = []
 
-    settings["hooks"]["SessionStart"].append({"hooks": [hook_config]})
+    added_any = False
+    for event in _EVENTS_TO_REGISTER:
+        if _is_hook_installed(settings, event):
+            logger.info("Hook already installed for %s in %s", event, settings_file)
+            continue
+        if event not in settings["hooks"]:
+            settings["hooks"][event] = []
+        settings["hooks"][event].append({"hooks": [hook_config]})
+        added_any = True
+        logger.info("Installing hook command for %s: %s", event, hook_command)
+
+    if not added_any:
+        print(f"Hook already installed in {settings_file}")
+        return 0
 
     # Write back
     try:
@@ -262,17 +425,22 @@ def _hook_main_impl() -> None:
     session_id = ""
     cwd = ""
     event = "SessionStart"
+    transcript_path = ""
+    permission_mode = ""
     try:
         payload = json.load(sys.stdin)
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         # `or` handles the case where the key is present but the value is "".
         event = payload.get("hook_event_name", "SessionStart") or "SessionStart"
+        transcript_path = payload.get("transcript_path", "") or ""
+        permission_mode = payload.get("permission_mode", "") or ""
     except (json.JSONDecodeError, ValueError) as e:
         logger.debug("stdin not usable JSON (%s); will try PID fallback", e)
 
-    if event != "SessionStart":
-        logger.debug("Ignoring non-SessionStart event: %s", event)
+    _ACCEPTED_EVENTS = {"SessionStart", "UserPromptSubmit"}
+    if event not in _ACCEPTED_EVENTS:
+        logger.debug("Ignoring event: %s", event)
         return
 
     # cwd must be absolute to be trustworthy.
@@ -327,79 +495,41 @@ def _hook_main_impl() -> None:
         cwd,
     )
 
-    # Read-modify-write with file locking to prevent concurrent hook races
     from .util import ccmux_dir
 
-    map_file = ccmux_dir() / "claude_instances.json"
-    map_file.parent.mkdir(parents=True, exist_ok=True)
+    # v4.0.0 event log: append one line for every accepted event. No locking
+    # — single-write O_APPEND is atomic for lines under PIPE_BUF (4 KB).
+    from datetime import datetime, timezone
 
-    lock_path = map_file.with_suffix(".lock")
+    from .event_log import ClaudeInfo, EventLogWriter, HookEvent, TmuxInfo
+
     try:
-        with open(lock_path, "w") as lock_f:
-            fcntl.flock(lock_f, fcntl.LOCK_EX)
-            logger.debug("Acquired lock on %s", lock_path)
-            try:
-                session_map: dict[str, dict[str, str]] = {}
-                if map_file.exists():
-                    try:
-                        session_map = json.loads(map_file.read_text())
-                    except (json.JSONDecodeError, OSError):
-                        logger.warning(
-                            "Failed to read existing session_map, starting fresh"
-                        )
-
-                # Guard: if this session already has a DIFFERENT window
-                # AND a different session_id, a second Claude was opened
-                # in the same tmux session. Reject to avoid overwriting.
-                #
-                # When the session_id matches, the new window is the same
-                # Claude session resuming in a new tmux window (typical
-                # after `_try_resume`): allow the overwrite so the registry
-                # tracks the live window instead of the dead one. Without
-                # this path, StateMonitor keeps polling the dead window,
-                # keeps emitting Dead, and auto-resume runs in a loop,
-                # creating a new tmux window on every tick.
-                existing = session_map.get(tmux_session_name)
-                if existing and existing.get("window_id") != window_id:
-                    if existing.get("session_id") != session_id:
-                        logger.warning(
-                            "Session '%s' already has window %s (session_id=%s), "
-                            "refusing to overwrite with window %s (session_id=%s). "
-                            "Only one Claude per tmux session.",
-                            tmux_session_name,
-                            existing.get("window_id"),
-                            existing.get("session_id"),
-                            window_id,
-                            session_id,
-                        )
-                        return
-                    logger.info(
-                        "Session '%s' resumed: window %s -> %s (session_id %s)",
-                        tmux_session_name,
-                        existing.get("window_id"),
-                        window_id,
-                        session_id,
-                    )
-
-                session_map[tmux_session_name] = {
-                    "window_id": window_id,
-                    "session_id": session_id,
-                    "cwd": cwd,
-                }
-
-                from .util import atomic_write_json
-
-                # Write to temp file then rename — prevents corrupt JSON
-                # if the process is interrupted mid-write
-                atomic_write_json(map_file, session_map)
-                logger.info(
-                    "Updated session_map: %s -> window_id=%s, session_id=%s, cwd=%s",
-                    tmux_session_name,
-                    window_id,
-                    session_id,
-                    cwd,
-                )
-            finally:
-                fcntl.flock(lock_f, fcntl.LOCK_UN)
-    except OSError as e:
-        logger.error("Failed to write session_map: %s", e)
+        writer = EventLogWriter(ccmux_dir() / "claude_events.jsonl")
+        writer.append(
+            HookEvent(
+                timestamp=datetime.now(timezone.utc),
+                hook_event=event,
+                tmux=TmuxInfo(
+                    session_id="",  # tmux's $-id not yet captured (not consumed)
+                    session_name=tmux_session_name,
+                    window_id=window_id,
+                    window_index="",
+                    window_name="",
+                    pane_id=pane_id,
+                    pane_index="",
+                ),
+                claude=ClaudeInfo(
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    cwd=cwd,
+                    permission_mode=permission_mode,
+                ),
+            )
+        )
+        logger.debug(
+            "Appended event-log entry: event=%s session=%s",
+            event,
+            session_id,
+        )
+    except Exception:
+        logger.exception("Failed to append to event log")
