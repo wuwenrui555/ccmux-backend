@@ -79,11 +79,66 @@ def _find_claude_pid(shell_pid: int) -> int | None:
     return None
 
 
+def _open_jsonl_session_id(pid: int) -> str | None:
+    """Return the session_id of the JSONL file currently held open by `pid`.
+
+    Linux: read ``/proc/<pid>/fd``. macOS: shell out to ``lsof -p``. Picks
+    the platform purely on whether ``/proc`` exists; never falls back
+    across platforms. Returns None if no matching JSONL is open or the
+    lookup fails.
+    """
+    if Path("/proc").is_dir():
+        # Linux path
+        proc_fd = Path(f"/proc/{pid}/fd")
+        try:
+            for fd_link in proc_fd.iterdir():
+                try:
+                    target = os.readlink(str(fd_link))
+                except OSError:
+                    continue
+                name = Path(target).name
+                if (
+                    name.endswith(".jsonl")
+                    and "/.claude/projects/" in target
+                    and _SESSION_FILE_RE.match(name)
+                ):
+                    return name[: -len(".jsonl")]
+        except OSError:
+            pass
+        return None
+
+    # macOS / no-/proc path: lsof
+    try:
+        result = subprocess.run(
+            ["lsof", "-p", str(pid), "-Fn"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if not line.startswith("n"):
+            continue
+        path = line[1:]
+        if (
+            path.endswith(".jsonl")
+            and "/.claude/projects/" in path
+            and _SESSION_FILE_RE.match(Path(path).name)
+        ):
+            return Path(path).stem
+    return None
+
+
 def resolve_for_pane(pane_id: str) -> tuple[str, str] | None:
     """Recover ``(session_id, launch_cwd)`` for the Claude in ``pane_id``.
 
     Walks: tmux pane -> shell pid -> claude pid -> launch cwd (stable
-    across /clear) -> newest transcript jsonl in the project dir.
+    across /clear). Resolves the session_id by inspecting which JSONL
+    file the claude pid currently has open (via /proc/<pid>/fd on Linux
+    or ``lsof`` on macOS). Falls back to "newest transcript jsonl in the
+    project dir" only when the per-pid lookup fails.
 
     Returns ``None`` if any step fails.
     """
@@ -115,6 +170,16 @@ def resolve_for_pane(pane_id: str) -> tuple[str, str] | None:
     if not launch_cwd or not os.path.isabs(launch_cwd):
         return None
 
+    # Prefer the JSONL this pid actually has open. That's the only way
+    # to disambiguate when multiple Claude windows share the same cwd
+    # (and therefore the same project dir).
+    open_sid = _open_jsonl_session_id(claude_pid)
+    if open_sid is not None:
+        return open_sid, launch_cwd
+
+    # Fallback: newest jsonl in the project dir. Imprecise when more
+    # than one Claude shares the cwd, but matches the legacy hook
+    # behavior for the empty-stdin path.
     project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
     try:
         candidates = [
