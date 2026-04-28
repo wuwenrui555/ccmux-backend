@@ -9,6 +9,30 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.1.3 — 2026-04-28
+
+### Changed
+
+- `Backend.reconcile_instance` no longer treats the resolver's
+  `session_id` as a source of truth, only as a predicate. v3.1.2's
+  fast-path already preserved the file value when the recorded
+  `window_id` was still alive; this release drops the remaining two
+  paths that propagated the resolver's guess (the JSONL-mtime
+  scoring step and the lowest-`window_index` fallback's "use the
+  resolver's session_id if available" branch). Behavior now:
+  recorded window alive → recorded entry returned unchanged;
+  recorded session_id matches a candidate's live session_id → pick
+  that window, preserve recorded session_id; otherwise lowest
+  `window_index` with recorded `session_id` preserved (or empty if
+  no recorded entry exists). The bot's `message_monitor` will not
+  start tracking a synthetic JSONL the resolver guessed wrong about;
+  if no `session_id` is known, it stays empty until the hook fires.
+- The JSONL-mtime correlation helper inside
+  `pid_session_resolver.resolve_for_pane` is now consulted only via
+  the matching predicate above; it stays in place for the hook's
+  empty-stdin fallback path where "newest jsonl in cwd" is still
+  the only available signal.
+
 ## 3.1.2 — 2026-04-28
 
 ### Fixed
