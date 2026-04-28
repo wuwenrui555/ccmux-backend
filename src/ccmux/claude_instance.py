@@ -61,7 +61,25 @@ class ClaudeInstanceRegistry:
     def __init__(self, map_file: Path | None = None) -> None:
         self._map_file = map_file if map_file is not None else config.instances_file
         self._data: dict[str, dict[str, str]] = {}
+        self._overrides: dict[str, ClaudeInstance] = {}
         self._read()
+
+    # -- in-memory overrides ------------------------------------------
+
+    def set_override(self, instance_id: str, instance: ClaudeInstance) -> None:
+        """Install or replace the in-memory override for `instance_id`.
+
+        Overrides win over the file-backed map for ``get`` /
+        ``get_by_window_id`` / ``find_by_session_id`` / ``contains`` /
+        ``all``. Used by reconcile to correct stale ``window_id`` /
+        ``session_id`` values without touching ``claude_instances.json``
+        (still hook-owned).
+        """
+        self._overrides[instance_id] = instance
+
+    def clear_override(self, instance_id: str) -> None:
+        """Remove the in-memory override (no-op if not present)."""
+        self._overrides.pop(instance_id, None)
 
     def _read(self) -> None:
         self._data = {}
@@ -85,7 +103,9 @@ class ClaudeInstanceRegistry:
     # -- lookups --------------------------------------------------------
 
     def get(self, instance_id: str) -> ClaudeInstance | None:
-        """Primary lookup by stable id."""
+        """Primary lookup by stable id. Override beats file."""
+        if instance_id in self._overrides:
+            return self._overrides[instance_id]
         entry = self._data.get(instance_id)
         if not entry:
             return None
@@ -94,7 +114,12 @@ class ClaudeInstanceRegistry:
     def get_by_window_id(self, window_id: str) -> ClaudeInstance | None:
         if not window_id:
             return None
+        for override in self._overrides.values():
+            if override.window_id == window_id:
+                return override
         for instance_id, entry in self._data.items():
+            if instance_id in self._overrides:
+                continue  # override already considered above
             if entry.get("window_id") == window_id:
                 return self._to_instance(instance_id, entry)
         return None
@@ -102,19 +127,34 @@ class ClaudeInstanceRegistry:
     def find_by_session_id(self, session_id: str) -> ClaudeInstance | None:
         if not session_id:
             return None
+        for override in self._overrides.values():
+            if override.session_id == session_id:
+                return override
         for instance_id, entry in self._data.items():
+            if instance_id in self._overrides:
+                continue
             if entry.get("session_id") == session_id:
                 return self._to_instance(instance_id, entry)
         return None
 
     def contains(self, instance_id: str) -> bool:
         """True iff ``instance_id`` has both a window_id and a session_id."""
+        if instance_id in self._overrides:
+            o = self._overrides[instance_id]
+            return bool(o.window_id and o.session_id)
         entry = self._data.get(instance_id)
         return bool(entry and entry.get("window_id") and entry.get("session_id"))
 
     def all(self) -> Iterator[ClaudeInstance]:
-        """Iterate only instances with a non-empty window_id."""
+        """Iterate instances with a non-empty window_id; override beats file."""
+        seen: set[str] = set()
+        for instance_id, override in self._overrides.items():
+            if override.window_id:
+                seen.add(instance_id)
+                yield override
         for instance_id, entry in list(self._data.items()):
+            if instance_id in seen:
+                continue
             wid = entry.get("window_id", "")
             if wid:
                 yield self._to_instance(instance_id, entry)
