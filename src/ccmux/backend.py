@@ -56,6 +56,7 @@ class ClaudeOps(Protocol):
 class Backend(Protocol):
     tmux: TmuxOps
     claude: ClaudeOps
+    claude_instances: ClaudeInstanceRegistry
 
     def get_instance(self, instance_id: str) -> ClaudeInstance | None: ...
 
@@ -192,6 +193,9 @@ class DefaultBackend:
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
+        # Public alias of self._registry — exposed so frontends can call
+        # set_override / clear_override on reconcile results.
+        self.claude_instances: ClaudeInstanceRegistry = self._registry
 
     # --- Queries -----------------------------------------------------
 
