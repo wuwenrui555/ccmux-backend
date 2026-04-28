@@ -79,11 +79,51 @@ def _find_claude_pid(shell_pid: int) -> int | None:
     return None
 
 
+def _session_id_by_mtime(pid: int, launch_cwd: str) -> str | None:
+    """Pick the JSONL this pid is actively writing to via mtime correlation.
+
+    ``~/.claude/sessions/<pid>.json`` carries an ``updatedAt`` field that
+    Claude bumps on activity. The active JSONL in
+    ``~/.claude/projects/<encoded-cwd>/`` has an mtime that tracks the
+    same timestamp, so the correct session_id for this pid is the JSONL
+    whose mtime is closest to ``updatedAt``. Works on Linux and macOS
+    alike (no /proc-fd or lsof; Bun-compiled Claude on macOS doesn't
+    keep its JSONL open between writes, so fd-based lookups miss).
+    """
+    sessions_file = Path.home() / ".claude" / "sessions" / f"{pid}.json"
+    try:
+        info = json.loads(sessions_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    updated_at_ms = info.get("updatedAt")
+    if not isinstance(updated_at_ms, (int, float)):
+        return None
+    target_mtime = updated_at_ms / 1000.0
+
+    project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
+    try:
+        candidates = [
+            p
+            for p in project_dir.iterdir()
+            if p.is_file() and _SESSION_FILE_RE.match(p.name)
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+
+    best = min(candidates, key=lambda p: abs(p.stat().st_mtime - target_mtime))
+    return best.stem
+
+
 def resolve_for_pane(pane_id: str) -> tuple[str, str] | None:
     """Recover ``(session_id, launch_cwd)`` for the Claude in ``pane_id``.
 
     Walks: tmux pane -> shell pid -> claude pid -> launch cwd (stable
-    across /clear) -> newest transcript jsonl in the project dir.
+    across /clear). Resolves the session_id by inspecting which JSONL
+    file the claude pid currently has open (via /proc/<pid>/fd on Linux
+    or ``lsof`` on macOS). Falls back to "newest transcript jsonl in the
+    project dir" only when the per-pid lookup fails.
 
     Returns ``None`` if any step fails.
     """
@@ -115,6 +155,14 @@ def resolve_for_pane(pane_id: str) -> tuple[str, str] | None:
     if not launch_cwd or not os.path.isabs(launch_cwd):
         return None
 
+    # Disambiguate via mtime correlation between sessions/<pid>.json
+    # updatedAt and project-dir JSONL mtimes. Works across multiple
+    # Claudes sharing the same cwd.
+    sid = _session_id_by_mtime(claude_pid, launch_cwd)
+    if sid is not None:
+        return sid, launch_cwd
+
+    # Last-resort fallback: newest jsonl in the project dir.
     project_dir = Path.home() / ".claude" / "projects" / _encode_project_dir(launch_cwd)
     try:
         candidates = [

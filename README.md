@@ -21,10 +21,11 @@ Everything below is exported from `ccmux.api`. Anything imported from submodules
 
 ### Lifecycle
 
-- `Backend` — Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols.
+- `Backend` — Protocol with `tmux: TmuxOps` and `claude: ClaudeOps` sub-protocols, and a `claude_instances: ClaudeInstanceRegistry` accessor.
 - `TmuxOps` — Tmux-side operations sub-protocol.
 - `ClaudeOps` — Claude-side operations sub-protocol.
 - `DefaultBackend` — Default `Backend` implementation; compose with `tmux_registry` and a `ClaudeInstanceRegistry`.
+- `Backend.reconcile_instance(instance_id)` — Async, pure read. Returns the `ClaudeInstance` the caller should now bind to (or `None` if no Claude lives in the named tmux session). Frontends apply the result via `claude_instances.set_override`.
 - `get_default_backend` / `set_default_backend` — Process-wide singleton accessors.
 
 ### State
@@ -41,7 +42,9 @@ Everything below is exported from `ccmux.api`. Anything imported from submodules
 ### Instances
 
 - `ClaudeInstance` — Backend view of one running Claude Code process (`instance_id`, `window_id`, `session_id`, `cwd`).
-- `ClaudeInstanceRegistry` — Persistent `instance_id → ClaudeInstance` map at `~/.ccmux/claude_instances.json`; populated by the `ccmux hook` CLI on Claude Code `SessionStart`.
+- `ClaudeInstanceRegistry` — Persistent `instance_id → ClaudeInstance` map at `~/.ccmux/claude_instances.json`; populated by the `ccmux hook` CLI on Claude Code `SessionStart`. Layered with an in-memory override so frontends can correct stale `window_id`s discovered by `reconcile_instance` without touching the file (still hook-owned).
+  - `set_override(instance_id, instance)` — install or replace an in-memory override; wins over the file value for `get` / `get_by_window_id` / `find_by_session_id` / `contains` / `all`.
+  - `clear_override(instance_id)` — drop the override; `get` reverts to the file value.
 - `ClaudeSession` — Summary of a Claude Code JSONL session file (`session_id`, `summary`, `message_count`, `file_path`).
 
 ### Tmux
