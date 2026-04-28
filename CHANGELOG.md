@@ -9,6 +9,22 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.1.2 — 2026-04-28
+
+### Fixed
+
+- `Backend.reconcile_instance` no longer clobbers a healthy
+  file-backed `ClaudeInstance` with the resolver's guess. v3.1.1
+  always called the resolver and returned its result; on hosts where
+  multiple Claudes share a launch cwd (common: every Claude under
+  `$HOME`), the mtime correlation could pick the wrong JSONL and
+  assign the wrong `session_id`, so frontends installed an override
+  that was strictly worse than the file. New fast path: if the
+  recorded `window_id` still exists in the tmux session and has a
+  Claude process, return the recorded entry verbatim. The full
+  resolver path runs only when the recorded `window_id` is gone
+  (the actual stale-window scenario the override layer is for).
+
 ## 3.1.1 — 2026-04-27
 
 ### Added
