@@ -9,6 +9,39 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.1.0 — 2026-04-27
+
+### Added
+
+- `Backend.reconcile_instance(instance_id)` — pure read API that, given
+  a tmux session name, returns the `ClaudeInstance` the caller should
+  bind to. Uses `pid_session_resolver.resolve_for_pane` to identify the
+  `session_id` of each candidate window; resolves multi-window cases by
+  recorded `session_id` match → most-recent JSONL mtime → lowest
+  tmux `window_index`.
+- `ClaudeInstanceRegistry.set_override` /
+  `ClaudeInstanceRegistry.clear_override` — in-memory override layer
+  letting consumers correct stale `window_id` mappings without
+  touching `claude_instances.json`. The hook remains the only writer
+  of that file.
+- `pid_session_resolver` module — public-ish entry point
+  `resolve_for_pane(pane_id) -> (session_id, cwd) | None`. Lifted from
+  the existing private `_resolve_session_via_pid` in `hook.py` so the
+  same chain is reusable from runtime code.
+- `TmuxSession.active_pane_id(window_id)` — small helper used by
+  `reconcile_instance` to map a `@N` window id to its `%M` active-pane
+  id for the resolver.
+
+### Changed
+
+- `_find_claude_pid` is now portable on macOS. The previous
+  Linux-only `/proc/<pid>/cmdline` check is preserved as the fast
+  path; when `/proc` isn't readable, it falls back to a
+  cross-platform signal — the presence of
+  `~/.claude/sessions/<pid>.json`, which Claude Code itself writes on
+  startup. The existing happy path for the hook on Linux is
+  unchanged.
+
 ## 3.0.2 — 2026-04-27
 
 ### Changed
