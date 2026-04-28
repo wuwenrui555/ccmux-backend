@@ -28,8 +28,11 @@ import sys
 from pathlib import Path
 
 from .pid_session_resolver import (
-    _PANE_RE,
-    _UUID_RE,
+    _PANE_RE,  # noqa: F401  (re-export for tests)
+    _SESSION_FILE_RE,  # noqa: F401
+    _UUID_RE,  # noqa: F401
+    _encode_project_dir,  # noqa: F401
+    _find_claude_pid,  # noqa: F401
     resolve_for_pane as _resolve_session_via_pid,
 )
 
