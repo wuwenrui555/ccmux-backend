@@ -205,19 +205,23 @@ class DefaultBackend:
     async def reconcile_instance(self, instance_id: str) -> ClaudeInstance | None:
         """Pick the Claude window the bot should now talk to.
 
-        Fast path: if the recorded ``window_id`` still exists and has a
-        Claude process, return the recorded entry verbatim. This avoids
-        clobbering a healthy file-backed entry with the resolver's
-        best-effort guess (mtime correlation is imprecise when multiple
-        Claudes share a cwd, and the recorded ``session_id`` is the
-        hook's authoritative answer for /clear too).
+        The override layer is for fixing **stale ``window_id``**, not
+        for inventing ``session_id`` values. Reconcile therefore never
+        propagates the resolver's session_id guess; ``session_id`` only
+        comes from the recorded file entry. The resolver is consulted
+        purely as a *predicate* — does this candidate's live session_id
+        match what we recorded? — to follow a Claude that migrated to a
+        new window via ``claude --resume`` (same session_id, new pid /
+        new window).
 
-        Otherwise the recorded entry is stale, so resolve the live
-        Claude window. Priority among live candidates:
-          (a) match recorded session_id against each candidate's
-              live session_id (via pid_session_resolver).
-          (b) most-recent JSONL mtime.
-          (c) lowest tmux window_index (list_windows order).
+        Priority:
+          (1) **Fast path:** recorded ``window_id`` still alive →
+              return recorded verbatim.
+          (2) **session_id match:** scan candidates; if any has a live
+              session_id equal to the recorded one, pick that window
+              and preserve recorded session_id.
+          (3) **Fallback:** lowest tmux ``window_index`` among live
+              candidates, preserve recorded session_id (or empty).
         """
         try:
             tm = self._tmux_registry.get_or_create(instance_id)
@@ -233,76 +237,43 @@ class DefaultBackend:
 
         recorded = self._registry.get(instance_id)
         recorded_sid = recorded.session_id if recorded else ""
+        recorded_cwd = recorded.cwd if recorded else ""
 
-        # Fast path: recorded entry still valid → return it as-is.
+        # (1) Fast path: recorded window still alive → return as-is.
         if recorded and recorded.window_id:
             for w in candidates:
                 if w.window_id == recorded.window_id:
                     return recorded
 
-        # Resolve (session_id, cwd) per candidate.
-        resolved: list[tuple[TmuxWindow, tuple[str, str] | None]] = []
-        for w in candidates:
-            pane_id = await self._active_pane_id(w.window_id)
-            r = _resolve_via_pane(pane_id) if pane_id else None
-            resolved.append((w, r))
-
-        # (a) recorded session_id match
+        # (2) session_id match: walk candidates, ask resolver "is this
+        # Claude's current session_id the recorded one?". If so, pick.
         if recorded_sid:
-            for w, r in resolved:
+            for w in candidates:
+                pane_id = await self._active_pane_id(w.window_id)
+                if not pane_id:
+                    continue
+                r = _resolve_via_pane(pane_id)
                 if r is not None and r[0] == recorded_sid:
                     return ClaudeInstance(
                         instance_id=instance_id,
                         window_id=w.window_id,
-                        session_id=r[0],
-                        cwd=r[1],
+                        session_id=recorded_sid,
+                        cwd=recorded_cwd or r[1],
                     )
 
-        # (b) most-recent JSONL mtime
-        scored: list[tuple[float, TmuxWindow, tuple[str, str]]] = []
-        for w, r in resolved:
-            if r is None:
-                continue
-            sid, cwd = r
-            jsonl = (
-                Path.home()
-                / ".claude"
-                / "projects"
-                / cwd.replace("/", "-").replace("_", "-").replace(".", "-")
-                / f"{sid}.jsonl"
-            )
-            try:
-                mtime = jsonl.stat().st_mtime
-            except OSError:
-                continue
-            scored.append((mtime, w, r))
-        if scored:
-            scored.sort(key=lambda t: t[0], reverse=True)
-            _, w, (sid, cwd) = scored[0]
-            return ClaudeInstance(
-                instance_id=instance_id,
-                window_id=w.window_id,
-                session_id=sid,
-                cwd=cwd,
-            )
-
-        # (c) lowest tmux window_index — list_windows preserves that order
+        # (3) Fallback: lowest window_index, preserve recorded session_id.
+        # We deliberately do NOT look up the new window's session_id —
+        # the resolver's mtime correlation is unreliable when multiple
+        # Claudes share a cwd, and getting it wrong would steer the bot's
+        # message_monitor at the wrong JSONL. Empty session_id means
+        # message_monitor won't track this binding's outputs until the
+        # hook fires (next SessionStart) and updates the file.
         w0 = candidates[0]
-        for w, r in resolved:
-            if w.window_id == w0.window_id and r is not None:
-                return ClaudeInstance(
-                    instance_id=instance_id,
-                    window_id=w.window_id,
-                    session_id=r[0],
-                    cwd=r[1],
-                )
-        # Resolver gave no info for w0; fall back to recorded values
-        # so message_monitor at least has *something* to track.
         return ClaudeInstance(
             instance_id=instance_id,
             window_id=w0.window_id,
             session_id=recorded_sid,
-            cwd=recorded.cwd if recorded else "",
+            cwd=recorded_cwd,
         )
 
     async def _active_pane_id(self, window_id: str) -> str:
