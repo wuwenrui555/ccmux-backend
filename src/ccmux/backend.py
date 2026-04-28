@@ -205,7 +205,15 @@ class DefaultBackend:
     async def reconcile_instance(self, instance_id: str) -> ClaudeInstance | None:
         """Pick the Claude window the bot should now talk to.
 
-        Priority:
+        Fast path: if the recorded ``window_id`` still exists and has a
+        Claude process, return the recorded entry verbatim. This avoids
+        clobbering a healthy file-backed entry with the resolver's
+        best-effort guess (mtime correlation is imprecise when multiple
+        Claudes share a cwd, and the recorded ``session_id`` is the
+        hook's authoritative answer for /clear too).
+
+        Otherwise the recorded entry is stale, so resolve the live
+        Claude window. Priority among live candidates:
           (a) match recorded session_id against each candidate's
               live session_id (via pid_session_resolver).
           (b) most-recent JSONL mtime.
@@ -225,6 +233,12 @@ class DefaultBackend:
 
         recorded = self._registry.get(instance_id)
         recorded_sid = recorded.session_id if recorded else ""
+
+        # Fast path: recorded entry still valid → return it as-is.
+        if recorded and recorded.window_id:
+            for w in candidates:
+                if w.window_id == recorded.window_id:
+                    return recorded
 
         # Resolve (session_id, cwd) per candidate.
         resolved: list[tuple[TmuxWindow, tuple[str, str] | None]] = []
