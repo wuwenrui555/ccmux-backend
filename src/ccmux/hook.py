@@ -73,24 +73,33 @@ def _find_ccmux_path() -> str:
     return "ccmux"
 
 
-def _is_hook_installed(settings: dict) -> bool:
-    """Check if ccmux hook is already installed in Claude Code settings.
+# Events the hook listens for. SessionStart catches new Claudes
+# and continuum-style respawns; UserPromptSubmit refreshes the
+# (tmux session, window, claude session, cwd, transcript) row on
+# every user message, so stale values self-heal between turns.
+_EVENTS_TO_REGISTER = ("SessionStart", "UserPromptSubmit")
+
+
+def _is_hook_installed(settings: dict, event: str = "SessionStart") -> bool:
+    """Check if ccmux hook is already installed for the given event.
 
     Parameters
     ----------
     settings : dict
         Parsed contents of `~/.claude/settings.json`.
+    event : str
+        Hook event key under `settings["hooks"]` to inspect.
 
     Returns
     -------
     bool
-        True if a SessionStart hook command matching `ccmux hook`
-        (or a full path ending with it) is found.
+        True if a hook command matching `ccmux hook` (or a full path
+        ending with it) is found under that event.
     """
     hooks = settings.get("hooks", {})
-    session_start = hooks.get("SessionStart", [])
+    entries = hooks.get(event, [])
 
-    for entry in session_start:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         inner_hooks = entry.get("hooks", [])
@@ -107,8 +116,8 @@ def _is_hook_installed(settings: dict) -> bool:
 def _install_hook() -> int:
     """Install the ccmux hook into Claude Code's settings.json.
 
-    Reads `~/.claude/settings.json`, appends a SessionStart hook entry
-    pointing to the ccmux executable, and writes back.
+    Registers `ccmux hook` under every event in `_EVENTS_TO_REGISTER`,
+    idempotently per event. Existing entries are preserved.
 
     Returns
     -------
@@ -128,25 +137,28 @@ def _install_hook() -> int:
             print(f"Error reading {settings_file}: {e}", file=sys.stderr)
             return 1
 
-    # Check if already installed
-    if _is_hook_installed(settings):
-        logger.info("Hook already installed in %s", settings_file)
-        print(f"Hook already installed in {settings_file}")
-        return 0
-
     # Find the full path to ccmux
     ccmux_path = _find_ccmux_path()
     hook_command = f"{ccmux_path} hook"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
-    logger.info("Installing hook command: %s", hook_command)
 
-    # Install the hook
     if "hooks" not in settings:
         settings["hooks"] = {}
-    if "SessionStart" not in settings["hooks"]:
-        settings["hooks"]["SessionStart"] = []
 
-    settings["hooks"]["SessionStart"].append({"hooks": [hook_config]})
+    added_any = False
+    for event in _EVENTS_TO_REGISTER:
+        if _is_hook_installed(settings, event):
+            logger.info("Hook already installed for %s in %s", event, settings_file)
+            continue
+        if event not in settings["hooks"]:
+            settings["hooks"][event] = []
+        settings["hooks"][event].append({"hooks": [hook_config]})
+        added_any = True
+        logger.info("Installing hook command for %s: %s", event, hook_command)
+
+    if not added_any:
+        print(f"Hook already installed in {settings_file}")
+        return 0
 
     # Write back
     try:
@@ -262,17 +274,22 @@ def _hook_main_impl() -> None:
     session_id = ""
     cwd = ""
     event = "SessionStart"
+    transcript_path = ""
+    permission_mode = ""
     try:
         payload = json.load(sys.stdin)
         session_id = payload.get("session_id", "")
         cwd = payload.get("cwd", "")
         # `or` handles the case where the key is present but the value is "".
         event = payload.get("hook_event_name", "SessionStart") or "SessionStart"
+        transcript_path = payload.get("transcript_path", "") or ""
+        permission_mode = payload.get("permission_mode", "") or ""
     except (json.JSONDecodeError, ValueError) as e:
         logger.debug("stdin not usable JSON (%s); will try PID fallback", e)
 
-    if event != "SessionStart":
-        logger.debug("Ignoring non-SessionStart event: %s", event)
+    _ACCEPTED_EVENTS = {"SessionStart", "UserPromptSubmit"}
+    if event not in _ACCEPTED_EVENTS:
+        logger.debug("Ignoring event: %s", event)
         return
 
     # cwd must be absolute to be trustworthy.
@@ -327,79 +344,123 @@ def _hook_main_impl() -> None:
         cwd,
     )
 
-    # Read-modify-write with file locking to prevent concurrent hook races
     from .util import ccmux_dir
 
-    map_file = ccmux_dir() / "claude_instances.json"
-    map_file.parent.mkdir(parents=True, exist_ok=True)
+    # Phase 1 coexistence: SessionStart still maintains the legacy
+    # claude_instances.json file with read-modify-write + overwrite guard,
+    # so consumers that haven't switched to the event log keep working.
+    # UserPromptSubmit only writes the event log; it does not touch the
+    # legacy file. The legacy block is removed in Phase 3.
+    if event == "SessionStart":
+        map_file = ccmux_dir() / "claude_instances.json"
+        map_file.parent.mkdir(parents=True, exist_ok=True)
 
-    lock_path = map_file.with_suffix(".lock")
-    try:
-        with open(lock_path, "w") as lock_f:
-            fcntl.flock(lock_f, fcntl.LOCK_EX)
-            logger.debug("Acquired lock on %s", lock_path)
-            try:
-                session_map: dict[str, dict[str, str]] = {}
-                if map_file.exists():
-                    try:
-                        session_map = json.loads(map_file.read_text())
-                    except (json.JSONDecodeError, OSError):
-                        logger.warning(
-                            "Failed to read existing session_map, starting fresh"
-                        )
+        lock_path = map_file.with_suffix(".lock")
+        try:
+            with open(lock_path, "w") as lock_f:
+                fcntl.flock(lock_f, fcntl.LOCK_EX)
+                logger.debug("Acquired lock on %s", lock_path)
+                try:
+                    session_map: dict[str, dict[str, str]] = {}
+                    if map_file.exists():
+                        try:
+                            session_map = json.loads(map_file.read_text())
+                        except (json.JSONDecodeError, OSError):
+                            logger.warning(
+                                "Failed to read existing session_map, starting fresh"
+                            )
 
-                # Guard: if this session already has a DIFFERENT window
-                # AND a different session_id, a second Claude was opened
-                # in the same tmux session. Reject to avoid overwriting.
-                #
-                # When the session_id matches, the new window is the same
-                # Claude session resuming in a new tmux window (typical
-                # after `_try_resume`): allow the overwrite so the registry
-                # tracks the live window instead of the dead one. Without
-                # this path, StateMonitor keeps polling the dead window,
-                # keeps emitting Dead, and auto-resume runs in a loop,
-                # creating a new tmux window on every tick.
-                existing = session_map.get(tmux_session_name)
-                if existing and existing.get("window_id") != window_id:
-                    if existing.get("session_id") != session_id:
-                        logger.warning(
-                            "Session '%s' already has window %s (session_id=%s), "
-                            "refusing to overwrite with window %s (session_id=%s). "
-                            "Only one Claude per tmux session.",
+                    # Guard: if this session already has a DIFFERENT window
+                    # AND a different session_id, a second Claude was opened
+                    # in the same tmux session. Reject to avoid overwriting.
+                    #
+                    # When the session_id matches, the new window is the same
+                    # Claude session resuming in a new tmux window (typical
+                    # after `_try_resume`): allow the overwrite so the registry
+                    # tracks the live window instead of the dead one. Without
+                    # this path, StateMonitor keeps polling the dead window,
+                    # keeps emitting Dead, and auto-resume runs in a loop,
+                    # creating a new tmux window on every tick.
+                    existing = session_map.get(tmux_session_name)
+                    write_legacy = True
+                    if existing and existing.get("window_id") != window_id:
+                        if existing.get("session_id") != session_id:
+                            logger.warning(
+                                "Session '%s' already has window %s (session_id=%s), "
+                                "refusing to overwrite with window %s (session_id=%s). "
+                                "Only one Claude per tmux session.",
+                                tmux_session_name,
+                                existing.get("window_id"),
+                                existing.get("session_id"),
+                                window_id,
+                                session_id,
+                            )
+                            write_legacy = False
+                        else:
+                            logger.info(
+                                "Session '%s' resumed: window %s -> %s (session_id %s)",
+                                tmux_session_name,
+                                existing.get("window_id"),
+                                window_id,
+                                session_id,
+                            )
+
+                    if write_legacy:
+                        session_map[tmux_session_name] = {
+                            "window_id": window_id,
+                            "session_id": session_id,
+                            "cwd": cwd,
+                        }
+                        from .util import atomic_write_json
+
+                        # Write to temp file then rename — prevents corrupt
+                        # JSON if the process is interrupted mid-write.
+                        atomic_write_json(map_file, session_map)
+                        logger.info(
+                            "Updated session_map: %s -> window_id=%s, session_id=%s, cwd=%s",
                             tmux_session_name,
-                            existing.get("window_id"),
-                            existing.get("session_id"),
                             window_id,
                             session_id,
+                            cwd,
                         )
-                        return
-                    logger.info(
-                        "Session '%s' resumed: window %s -> %s (session_id %s)",
-                        tmux_session_name,
-                        existing.get("window_id"),
-                        window_id,
-                        session_id,
-                    )
+                finally:
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
+        except OSError as e:
+            logger.error("Failed to write session_map: %s", e)
 
-                session_map[tmux_session_name] = {
-                    "window_id": window_id,
-                    "session_id": session_id,
-                    "cwd": cwd,
-                }
+    # v4.0.0 event log: append one line for every accepted event. No locking
+    # — single-write O_APPEND is atomic for lines under PIPE_BUF (4 KB).
+    from datetime import datetime, timezone
 
-                from .util import atomic_write_json
+    from .event_log import ClaudeInfo, EventLogWriter, HookEvent, TmuxInfo
 
-                # Write to temp file then rename — prevents corrupt JSON
-                # if the process is interrupted mid-write
-                atomic_write_json(map_file, session_map)
-                logger.info(
-                    "Updated session_map: %s -> window_id=%s, session_id=%s, cwd=%s",
-                    tmux_session_name,
-                    window_id,
-                    session_id,
-                    cwd,
-                )
-            finally:
-                fcntl.flock(lock_f, fcntl.LOCK_UN)
-    except OSError as e:
-        logger.error("Failed to write session_map: %s", e)
+    try:
+        writer = EventLogWriter(ccmux_dir() / "claude_events.jsonl")
+        writer.append(
+            HookEvent(
+                timestamp=datetime.now(timezone.utc),
+                hook_event=event,
+                tmux=TmuxInfo(
+                    session_id="",  # tmux's $-id not yet captured (not consumed)
+                    session_name=tmux_session_name,
+                    window_id=window_id,
+                    window_index="",
+                    window_name="",
+                    pane_id=pane_id,
+                    pane_index="",
+                ),
+                claude=ClaudeInfo(
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    cwd=cwd,
+                    permission_mode=permission_mode,
+                ),
+            )
+        )
+        logger.debug(
+            "Appended event-log entry: event=%s session=%s",
+            event,
+            session_id,
+        )
+    except Exception:
+        logger.exception("Failed to append to event log")

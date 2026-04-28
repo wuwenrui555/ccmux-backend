@@ -15,6 +15,7 @@ from ccmux.hook import (
     _UUID_RE,
     _encode_project_dir,
     _find_claude_pid,
+    _install_hook,
     _is_hook_installed,
     _resolve_session_via_pid,
     hook_main,
@@ -797,3 +798,121 @@ class TestHookMainEmptyStdinFallback:
         hook_main()
 
         assert not (ccmux_dir / "claude_instances.json").exists()
+
+
+class TestHookWritesEventLog:
+    """v4.0.0: hook accepts SessionStart + UserPromptSubmit and appends to
+    ~/.ccmux/claude_events.jsonl in addition to whatever legacy paths it runs.
+    """
+
+    def _mock_tmux(self, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+        result = MagicMock()
+        result.stdout = output
+        result.returncode = 0
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: result)
+
+    def _run_hook(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        payload: dict,
+        tmux_output: str,
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["ccmux", "hook"])
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setenv("TMUX_PANE", "%0")
+        self._mock_tmux(monkeypatch, tmux_output)
+        hook_main()
+
+    def test_user_prompt_submit_appends_to_event_log(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+        self._run_hook(
+            monkeypatch,
+            {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "cwd": "/home/u",
+                "transcript_path": "/home/u/.claude/projects/p/sess.jsonl",
+                "permission_mode": "default",
+                "hook_event_name": "UserPromptSubmit",
+            },
+            "ccmux:@5\n",
+        )
+
+        log = tmp_path / "claude_events.jsonl"
+        assert log.exists()
+        lines = log.read_text().splitlines()
+        assert len(lines) == 1
+
+        from ccmux.event_log import HookEvent
+
+        event = HookEvent.from_jsonl(lines[0] + "\n")
+        assert event.hook_event == "UserPromptSubmit"
+        assert event.tmux.session_name == "ccmux"
+        assert event.tmux.window_id == "@5"
+        assert event.claude.session_id == "550e8400-e29b-41d4-a716-446655440000"
+        assert event.claude.transcript_path == "/home/u/.claude/projects/p/sess.jsonl"
+        assert event.claude.cwd == "/home/u"
+
+    def test_session_start_writes_legacy_and_new_event_log(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Phase 1 coexistence: SessionStart still writes claude_instances.json
+        AND now also appends a line to claude_events.jsonl.
+        """
+        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+        self._run_hook(
+            monkeypatch,
+            {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "cwd": "/home/u",
+                "transcript_path": "/home/u/.claude/projects/p/sess.jsonl",
+                "permission_mode": "default",
+                "hook_event_name": "SessionStart",
+            },
+            "ccmux:@5\n",
+        )
+
+        legacy = json.loads((tmp_path / "claude_instances.json").read_text())
+        assert legacy["ccmux"]["window_id"] == "@5"
+        assert legacy["ccmux"]["session_id"] == "550e8400-e29b-41d4-a716-446655440000"
+
+        events_log = tmp_path / "claude_events.jsonl"
+        assert events_log.exists()
+        lines = events_log.read_text().splitlines()
+        assert len(lines) == 1
+
+        from ccmux.event_log import HookEvent
+
+        event = HookEvent.from_jsonl(lines[0] + "\n")
+        assert event.hook_event == "SessionStart"
+        assert event.tmux.session_name == "ccmux"
+
+    def test_install_registers_session_start_and_user_prompt_submit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        settings_file = tmp_path / "settings.json"
+        from ccmux import hook as hook_mod
+
+        monkeypatch.setattr(hook_mod, "_CLAUDE_SETTINGS_FILE", settings_file)
+
+        rc = _install_hook()
+        assert rc == 0
+
+        settings = json.loads(settings_file.read_text())
+        assert "hooks" in settings
+        assert "SessionStart" in settings["hooks"]
+        assert "UserPromptSubmit" in settings["hooks"]
+
+        def _has_ccmux(entries: list) -> bool:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                for h in entry.get("hooks", []):
+                    cmd = h.get("command", "") if isinstance(h, dict) else ""
+                    if cmd.endswith("ccmux hook") or cmd == "ccmux hook":
+                        return True
+            return False
+
+        assert _has_ccmux(settings["hooks"]["SessionStart"])
+        assert _has_ccmux(settings["hooks"]["UserPromptSubmit"])
