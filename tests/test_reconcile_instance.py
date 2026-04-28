@@ -32,6 +32,38 @@ def backend(registry: ClaudeInstanceRegistry) -> DefaultBackend:
 
 
 @pytest.mark.asyncio
+async def test_reconcile_preserves_valid_recorded_entry(
+    backend: DefaultBackend, registry: ClaudeInstanceRegistry
+) -> None:
+    """Recorded entry's window_id still alive → return it verbatim,
+    even if the resolver would have picked a different session_id."""
+    sid_recorded = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    registry._data["fusion"] = {
+        "window_id": "@500",
+        "session_id": sid_recorded,
+        "cwd": "/Users/wenruiwu",
+    }
+
+    fake_session = AsyncMock()
+    fake_session.list_windows.return_value = [_window("@500"), _window("@486")]
+    fake_session.active_pane_id = AsyncMock(side_effect=lambda wid: f"%{wid[1:]}")
+
+    sid_resolver_guess = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    with patch.object(tmux_registry, "get_or_create", return_value=fake_session):
+        with patch.object(tmux_registry, "get_by_window_id", return_value=fake_session):
+            with patch(
+                "ccmux.backend._resolve_via_pane",
+                return_value=(sid_resolver_guess, "/Users/wenruiwu"),
+                create=True,
+            ):
+                result = await backend.reconcile_instance("fusion")
+
+    assert result is not None
+    assert result.window_id == "@500"
+    assert result.session_id == sid_recorded  # NOT the resolver's guess
+
+
+@pytest.mark.asyncio
 async def test_reconcile_no_claude_windows(backend: DefaultBackend) -> None:
     fake_session = AsyncMock()
     fake_session.list_windows.return_value = [
