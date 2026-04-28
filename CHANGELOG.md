@@ -9,6 +9,24 @@ require a major bump.
 
 ## [Unreleased]
 
+## 4.0.1 — 2026-04-28
+
+### Performance
+
+- ``StateMonitor.fast_tick`` and ``slow_tick`` now classify all live
+  bindings concurrently via ``asyncio.gather`` instead of serially
+  awaiting one binding at a time. tmux helpers in ``ccmux.tmux``
+  already wrap their subprocess calls with ``asyncio.to_thread``, so
+  concurrent ``capture_pane`` / ``find_window_by_id`` calls really
+  run in parallel on the thread pool.
+
+  Practical effect on a 12-binding host: per-tick latency dropped
+  from ~1.2 s (serial sum of tmux IO) to ~100 ms (slowest single
+  tmux call). The visible symptom — only one Claude's status line
+  advancing at a time when several were thinking — goes away.
+
+  No API change.
+
 ## 4.0.0 — 2026-04-28
 
 Layer 2 (tmux session ↔ Claude instance) is rebuilt around an
