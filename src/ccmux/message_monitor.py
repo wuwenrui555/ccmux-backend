@@ -1,7 +1,7 @@
 """Session monitoring service — watches JSONL files for new messages.
 
 Runs an async polling loop that:
-  1. Reads active Claude session IDs from the ClaudeInstanceRegistry.
+  1. Reads active Claude session IDs from the EventLogReader projection.
   2. Reads new JSONL lines from each session file using byte-offset tracking.
   3. Parses entries via TranscriptParser and emits ClaudeMessage objects to a callback.
 
@@ -23,7 +23,7 @@ from .claude_transcript_parser import ClaudeMessage, TranscriptParser
 from .util import atomic_write_json
 
 if TYPE_CHECKING:
-    from .claude_instance import ClaudeInstanceRegistry
+    from .event_log import EventLogReader
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +244,7 @@ class MessageMonitor:
         self,
         projects_path: Path | None = None,
         state_file: Path | None = None,
-        registry: "ClaudeInstanceRegistry | None" = None,
+        event_reader: "EventLogReader | None" = None,
         show_user_messages: bool | None = None,
     ):
         self.projects_path = (
@@ -254,10 +254,10 @@ class MessageMonitor:
         self.state = MonitorState(state_file=state_file or config.monitor_state_file)
         self.state.load()
 
-        # Injected instance registry — the authoritative source of active
-        # Claude sessions. Left optional for test convenience; callers in
+        # Injected event-log reader — the authoritative source of active
+        # Claude bindings. Left optional for test convenience; callers in
         # production (DefaultBackend) always pass one.
-        self._registry = registry
+        self._event_reader = event_reader
 
         # Controls whether user-typed messages are emitted. Default falls
         # back to the env-driven `config.show_user_messages` so existing
@@ -508,18 +508,18 @@ class MessageMonitor:
     def startup_cleanup(self) -> None:
         """One-time cleanup on bot startup.
 
-        Removes tracked sessions not present in the current
-        `claude_instances.json` (cleans up leftover state from sessions
-        that no longer exist). No-op when no registry was injected
-        (test fixtures).
+        Drops tracked sessions whose ``claude_session_id`` is no longer
+        present in the event-log projection (cleans up leftover state
+        from sessions that no longer exist). No-op when no reader was
+        injected (test fixtures).
         """
-        if self._registry is None:
+        if self._event_reader is None:
             return
 
         active_session_ids = {
-            entry["session_id"]
-            for entry in self._registry.raw.values()
-            if entry.get("session_id")
+            b.claude_session_id
+            for b in self._event_reader.all_alive()
+            if b.claude_session_id
         }
         stale = [
             sid
@@ -536,16 +536,22 @@ class MessageMonitor:
     async def poll(self) -> list[tuple[str, ClaudeMessage]]:
         """Perform a single scan cycle.
 
-        Reads active Claude session IDs from the registry (all instances,
-        not just alive — monitor is resilient to temporarily dead
-        instances). Returns (instance_id, ClaudeMessage) pairs for any
-        new JSONL content. Orphan transcripts (no matching instance in
-        the registry) are skipped with no emission.
+        Reads active Claude session IDs from the event-log reader.
+        Returns ``(instance_id, ClaudeMessage)`` pairs for any new
+        JSONL content. Orphan transcripts (no matching binding in the
+        reader) are skipped with no emission.
         """
-        if self._registry is None:
+        if self._event_reader is None:
             return []
+        bindings = self._event_reader.all_alive()
         active_session_ids = {
-            inst.session_id for inst in self._registry.all() if inst.session_id
+            b.claude_session_id for b in bindings if b.claude_session_id
+        }
+        # session_id -> tmux_session_name (= instance_id)
+        sid_to_instance: dict[str, str] = {
+            b.claude_session_id: b.tmux_session_name
+            for b in bindings
+            if b.claude_session_id
         }
 
         new_messages = await self.check_for_updates(active_session_ids)
@@ -556,15 +562,15 @@ class MessageMonitor:
             preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
             logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
 
-            inst = self._registry.find_by_session_id(msg.session_id)
-            if inst is None:
+            instance_id = sid_to_instance.get(msg.session_id)
+            if not instance_id:
                 # Orphan transcript — no bound instance. Skip.
                 logger.debug(
-                    "No registry entry for session_id=%s; dropping message",
+                    "No event-log binding for session_id=%s; dropping message",
                     msg.session_id,
                 )
                 continue
-            pairs.append((inst.instance_id, msg))
+            pairs.append((instance_id, msg))
 
         return pairs
 

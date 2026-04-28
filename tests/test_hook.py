@@ -136,7 +136,7 @@ class TestHookMainValidation:
                 "hook_event_name": "SessionStart",
             },
         )
-        assert not (tmp_path / "claude_instances.json").exists()
+        assert not (tmp_path / "claude_events.jsonl").exists()
 
     def test_invalid_uuid_format(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -150,7 +150,7 @@ class TestHookMainValidation:
                 "hook_event_name": "SessionStart",
             },
         )
-        assert not (tmp_path / "claude_instances.json").exists()
+        assert not (tmp_path / "claude_events.jsonl").exists()
 
     def test_no_tmux_pane_skips(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -164,7 +164,7 @@ class TestHookMainValidation:
                 "hook_event_name": "SessionStart",
             },
         )
-        assert not (tmp_path / "claude_instances.json").exists()
+        assert not (tmp_path / "claude_events.jsonl").exists()
 
     def test_non_session_start_event(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -178,152 +178,7 @@ class TestHookMainValidation:
                 "hook_event_name": "Stop",
             },
         )
-        assert not (tmp_path / "claude_instances.json").exists()
-
-
-class TestHookSessionMapWrite:
-    """Tests that verify actual claude_instances.json writing behavior.
-
-    These mock subprocess.run (tmux display-message) and TMUX_PANE to
-    simulate running inside a tmux pane.
-    """
-
-    def _mock_tmux(self, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
-        """Mock subprocess.run to return a fake tmux display-message output."""
-        result = MagicMock()
-        result.stdout = output
-        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: result)
-
-    def _run_hook(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        payload: dict,
-        tmux_output: str,
-    ) -> None:
-        monkeypatch.setattr(sys, "argv", ["ccmux", "hook"])
-        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
-        monkeypatch.setenv("TMUX_PANE", "%0")
-        self._mock_tmux(monkeypatch, tmux_output)
-        hook_main()
-
-    def test_writes_session_map(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": "550e8400-e29b-41d4-a716-446655440000",
-                "cwd": "/home/user/project",
-                "hook_event_name": "SessionStart",
-            },
-            "aclf:@4\n",
-        )
-
-        data = json.loads((tmp_path / "claude_instances.json").read_text())
-        assert data["aclf"]["window_id"] == "@4"
-        assert data["aclf"]["session_id"] == "550e8400-e29b-41d4-a716-446655440000"
-        assert data["aclf"]["cwd"] == "/home/user/project"
-
-    def test_same_window_updates_session_id(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        """Same window_id (e.g. after /clear) should update session_id."""
-        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": "aaaa0000-0000-0000-0000-000000000000",
-                "cwd": "/tmp",
-                "hook_event_name": "SessionStart",
-            },
-            "daily:@3\n",
-        )
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": "bbbb0000-0000-0000-0000-000000000000",
-                "cwd": "/tmp",
-                "hook_event_name": "SessionStart",
-            },
-            "daily:@3\n",
-        )
-
-        data = json.loads((tmp_path / "claude_instances.json").read_text())
-        assert data["daily"]["session_id"] == "bbbb0000-0000-0000-0000-000000000000"
-
-    def test_different_window_refuses_overwrite(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        """Second Claude in the same session (different window_id) should NOT overwrite."""
-        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": "aaaa0000-0000-0000-0000-000000000000",
-                "cwd": "/tmp",
-                "hook_event_name": "SessionStart",
-            },
-            "aclf:@4\n",
-        )
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": "bbbb0000-0000-0000-0000-000000000000",
-                "cwd": "/tmp",
-                "hook_event_name": "SessionStart",
-            },
-            "aclf:@9\n",
-        )
-
-        data = json.loads((tmp_path / "claude_instances.json").read_text())
-        assert data["aclf"]["window_id"] == "@4"
-        assert data["aclf"]["session_id"] == "aaaa0000-0000-0000-0000-000000000000"
-
-    def test_same_session_resume_updates_window(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        """Resume of the same session in a new tmux window overwrites.
-
-        `_try_resume` opens a fresh tmux window running
-        ``claude --resume <session_id>``. The SessionStart hook then
-        fires with the original session_id but a new window_id. The
-        registry must follow the live window; otherwise StateMonitor
-        keeps polling the dead window, emits Dead forever, and
-        auto-resume runs in a loop.
-        """
-        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
-
-        session_id = "cccc0000-0000-0000-0000-000000000000"
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": session_id,
-                "cwd": "/tmp",
-                "hook_event_name": "SessionStart",
-            },
-            "test:@242\n",
-        )
-
-        self._run_hook(
-            monkeypatch,
-            {
-                "session_id": session_id,  # same session, different window
-                "cwd": "/tmp",
-                "hook_event_name": "SessionStart",
-            },
-            "test:@379\n",
-        )
-
-        data = json.loads((tmp_path / "claude_instances.json").read_text())
-        assert data["test"]["window_id"] == "@379"
-        assert data["test"]["session_id"] == session_id
+        assert not (tmp_path / "claude_events.jsonl").exists()
 
 
 class TestHookFileLogging:
@@ -630,7 +485,8 @@ class TestResolveSessionViaPid:
 
 class TestHookMainEmptyStdinFallback:
     """When Claude Code sends empty stdin, hook_main must reconstruct
-    session_id + cwd via the PID fallback and still write claude_instances.json.
+    session_id + cwd via the PID fallback and still append an event-log
+    line.
     """
 
     def _lay_out_claude_home(
@@ -720,10 +576,16 @@ class TestHookMainEmptyStdinFallback:
 
         hook_main()
 
-        data = json.loads((ccmux_dir / "claude_instances.json").read_text())
-        assert data["ccmux"]["window_id"] == "@16"
-        assert data["ccmux"]["session_id"] == new_session_id
-        assert data["ccmux"]["cwd"] == "/mnt/data/project"
+        log = ccmux_dir / "claude_events.jsonl"
+        assert log.exists()
+        from ccmux.event_log import HookEvent
+
+        line = log.read_text().splitlines()[0]
+        ev = HookEvent.from_jsonl(line + "\n")
+        assert ev.tmux.session_name == "ccmux"
+        assert ev.tmux.window_id == "@16"
+        assert ev.claude.session_id == new_session_id
+        assert ev.claude.cwd == "/mnt/data/project"
 
     def test_empty_stdin_with_failed_fallback_skips_silently(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -854,11 +716,11 @@ class TestHookWritesEventLog:
         assert event.claude.transcript_path == "/home/u/.claude/projects/p/sess.jsonl"
         assert event.claude.cwd == "/home/u"
 
-    def test_session_start_writes_legacy_and_new_event_log(
+    def test_session_start_appends_to_event_log(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        """Phase 1 coexistence: SessionStart still writes claude_instances.json
-        AND now also appends a line to claude_events.jsonl.
+        """SessionStart appends one line to claude_events.jsonl. v4.0.0
+        does not maintain the legacy claude_instances.json file.
         """
         monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
         self._run_hook(
@@ -873,9 +735,8 @@ class TestHookWritesEventLog:
             "ccmux:@5\n",
         )
 
-        legacy = json.loads((tmp_path / "claude_instances.json").read_text())
-        assert legacy["ccmux"]["window_id"] == "@5"
-        assert legacy["ccmux"]["session_id"] == "550e8400-e29b-41d4-a716-446655440000"
+        # Legacy file is gone in v4.0.0.
+        assert not (tmp_path / "claude_instances.json").exists()
 
         events_log = tmp_path / "claude_events.jsonl"
         assert events_log.exists()
@@ -887,6 +748,7 @@ class TestHookWritesEventLog:
         event = HookEvent.from_jsonl(lines[0] + "\n")
         assert event.hook_event == "SessionStart"
         assert event.tmux.session_name == "ccmux"
+        assert event.tmux.window_id == "@5"
 
     def test_install_registers_session_start_and_user_prompt_submit(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path

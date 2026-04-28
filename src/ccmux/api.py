@@ -39,8 +39,19 @@ from .claude_state import (
 # Message family (emitted via on_message)
 from .claude_transcript_parser import ClaudeMessage, TranscriptParser
 
-# Instance model
-from .claude_instance import ClaudeInstance, ClaudeInstanceRegistry, ClaudeSession
+# Claude session summary (frontend `/list` and similar commands)
+from .claude_files import ClaudeSession
+
+# Event log: hook-written append-only log + reader projection.
+# Source of truth for "which Claude is in tmux session X" since v4.0.0.
+from .event_log import (
+    ClaudeInfo,
+    CurrentClaudeBinding,
+    EventLogReader,
+    EventLogWriter,
+    HookEvent,
+    TmuxInfo,
+)
 
 # Parser data types
 from .tmux_pane_parser import InteractiveUIContent, UsageInfo
@@ -83,10 +94,15 @@ __all__ = [
     # Message / transcript
     "ClaudeMessage",
     "TranscriptParser",
-    # Instance model
-    "ClaudeInstance",
-    "ClaudeInstanceRegistry",
+    # Session summary
     "ClaudeSession",
+    # Event log
+    "CurrentClaudeBinding",
+    "EventLogReader",
+    "EventLogWriter",
+    "HookEvent",
+    "TmuxInfo",
+    "ClaudeInfo",
     # Composition inputs
     "TmuxSessionRegistry",
     # Parser surfaces

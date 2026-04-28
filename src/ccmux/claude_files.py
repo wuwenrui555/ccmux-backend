@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aiofiles
 
 from .config import config
-from .claude_instance import ClaudeInstanceRegistry, ClaudeSession
 from .claude_transcript_parser import TranscriptParser
 
 if TYPE_CHECKING:
@@ -23,17 +23,40 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ClaudeSession:
+    """Summary of a Claude Code JSONL session file (frontend-facing)."""
+
+    session_id: str
+    summary: str
+    message_count: int
+    file_path: str
+
+
+def _encode_cwd(cwd: str) -> str:
+    """Convert a cwd to Claude Code's project-directory naming.
+
+    Claude Code stores transcripts under
+    ``~/.claude/projects/<encoded>/<session-uuid>.jsonl`` where
+    ``<encoded>`` replaces every ``/`` and ``_`` in ``cwd`` with ``-``.
+    """
+    return cwd.replace("/", "-").replace("_", "-")
+
+
 class ClaudeFileResolver:
     """Find and read Claude Code JSONL session files."""
 
-    def __init__(self, registry: ClaudeInstanceRegistry) -> None:
-        self._registry = registry
+    def __init__(self) -> None:
+        pass
 
     def build_path(self, claude_session_id: str, cwd: str) -> Path | None:
         if not claude_session_id or not cwd:
             return None
-        encoded = ClaudeInstanceRegistry.encode_cwd(cwd)
-        return config.claude_projects_path / encoded / f"{claude_session_id}.jsonl"
+        return (
+            config.claude_projects_path
+            / _encode_cwd(cwd)
+            / f"{claude_session_id}.jsonl"
+        )
 
     async def find_file(self, claude_session_id: str, cwd: str = "") -> Path | None:
         if cwd:
