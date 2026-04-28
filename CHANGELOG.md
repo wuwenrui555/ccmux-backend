@@ -9,6 +9,29 @@ require a major bump.
 
 ## [Unreleased]
 
+## 3.1.1 — 2026-04-27
+
+### Added
+
+- `Backend.claude_instances` accessor — typed handle on the
+  `Backend` Protocol (and a plain attribute on `DefaultBackend`) so
+  frontends can call `set_override` / `clear_override` without
+  reaching into private state.
+
+### Fixed
+
+- `pid_session_resolver.resolve_for_pane` now disambiguates Claude
+  instances that share a launch cwd. The previous "newest jsonl in
+  the project dir" fallback returned the same `session_id` for every
+  candidate when multiple Claudes lived under one cwd; consumers
+  (notably `reconcile_instance`) then assigned a single jsonl to
+  several bindings, and Claude's outputs were routed to the wrong
+  topic. The resolver now reads `~/.claude/sessions/<pid>.json` for
+  each candidate's `updatedAt` timestamp and picks the JSONL whose
+  mtime is closest. Works on Linux and macOS without `lsof` or
+  `/proc/<pid>/fd` (Bun-compiled Claude on macOS doesn't keep its
+  JSONL open between writes, so fd-based lookups miss anyway).
+
 ## 3.1.0 — 2026-04-27
 
 ### Added
