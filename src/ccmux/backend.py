@@ -173,7 +173,6 @@ class DefaultBackend:
         tmux_registry: TmuxSessionRegistry,
         message_monitor: MessageMonitor | None = None,
         slow_interval: float = 60.0,
-        show_user_messages: bool | None = None,
         *,
         event_reader: EventLogReader | None = None,
     ) -> None:
@@ -188,7 +187,6 @@ class DefaultBackend:
         self._files = ClaudeFileResolver()
         self._message_monitor = message_monitor or MessageMonitor(
             event_reader=self.event_reader,
-            show_user_messages=show_user_messages,
         )
         self._slow_interval = slow_interval
         self._fast_task: asyncio.Task[None] | None = None
