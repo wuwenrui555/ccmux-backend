@@ -245,7 +245,6 @@ class MessageMonitor:
         projects_path: Path | None = None,
         state_file: Path | None = None,
         event_reader: "EventLogReader | None" = None,
-        show_user_messages: bool | None = None,
     ):
         self.projects_path = (
             projects_path if projects_path is not None else config.claude_projects_path
@@ -258,15 +257,6 @@ class MessageMonitor:
         # Claude bindings. Left optional for test convenience; callers in
         # production (DefaultBackend) always pass one.
         self._event_reader = event_reader
-
-        # Controls whether user-typed messages are emitted. Default falls
-        # back to the env-driven `config.show_user_messages` so existing
-        # deployments keep working; pass explicitly to override.
-        self._show_user_messages = (
-            config.show_user_messages
-            if show_user_messages is None
-            else show_user_messages
-        )
 
         self._pending_tools: dict[str, dict[str, Any]] = {}
         self._last_cmd_names: dict[str, str | None] = {}
@@ -488,9 +478,6 @@ class MessageMonitor:
 
                 for entry in parsed_entries:
                     if not entry.text and not entry.image_data:
-                        continue
-                    # Skip user messages unless show_user_messages is enabled
-                    if entry.role == "user" and not self._show_user_messages:
                         continue
                     entry.is_complete = True
                     new_messages.append(entry)

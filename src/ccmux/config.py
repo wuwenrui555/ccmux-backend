@@ -3,8 +3,10 @@
 Only the Claude-tmux backend's own settings live here. Frontend packages
 ship their own `config.py` for bot tokens, allow-lists, etc.
 
-.env loading priority: local `.env` (cwd) > `$CCMUX_DIR/.env` (default
-`~/.ccmux/.env`). Reads:
+Loads `settings.env` only — backend has no secrets, so it never reads
+`.env` (which is reserved for sensitive values consumed by frontends).
+Loading priority: cwd `settings.env` > `$CCMUX_DIR/settings.env`
+(default `~/.ccmux/settings.env`). Reads:
 
 - `CCMUX_TMUX_SESSION_NAME` (default `__ccmux__`) — reserved session
   that holds the bot process itself; never listed as a binding target.
@@ -12,7 +14,8 @@ ship their own `config.py` for bot tokens, allow-lists, etc.
 - `CCMUX_CLAUDE_PROJECTS_PATH` / `CLAUDE_CONFIG_DIR` — where Claude
   Code writes its JSONL transcripts.
 - `CCMUX_MONITOR_POLL_INTERVAL` (default `0.5` seconds) — fast-loop tick.
-- `CCMUX_DIR` (default `~/.ccmux`) — state-file root.
+- `CCMUX_DIR` (default `~/.ccmux`) — state-file root. Read from the
+  process environment; not loaded from settings.env (chicken-and-egg).
 """
 
 import logging
@@ -26,8 +29,7 @@ from .util import ccmux_dir
 logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Claude Code via tmux).
-# Kept minimal in the backend; frontends append their own (bot tokens, API
-# keys) to their local copy.
+# Backend has none; frontends maintain their own list.
 SENSITIVE_ENV_VARS: set[str] = set()
 
 
@@ -38,14 +40,14 @@ class Config:
         self.config_dir = ccmux_dir()
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
-        local_env = Path(".env")
-        global_env = self.config_dir / ".env"
-        if local_env.is_file():
-            load_dotenv(local_env)
-            logger.debug("Loaded env from %s", local_env.resolve())
-        if global_env.is_file():
-            load_dotenv(global_env)
-            logger.debug("Loaded env from %s", global_env)
+        local_settings = Path("settings.env")
+        global_settings = self.config_dir / "settings.env"
+        if local_settings.is_file():
+            load_dotenv(local_settings)
+            logger.debug("Loaded settings from %s", local_settings.resolve())
+        if global_settings.is_file():
+            load_dotenv(global_settings)
+            logger.debug("Loaded settings from %s", global_settings)
 
         # Reserved tmux session name — holds the bot process itself.
         self.tmux_session_name = os.getenv("CCMUX_TMUX_SESSION_NAME", "__ccmux__")
@@ -67,12 +69,6 @@ class Config:
 
         self.monitor_poll_interval = float(
             os.getenv("CCMUX_MONITOR_POLL_INTERVAL", "0.5")
-        )
-
-        # Emit user-typed messages as ClaudeMessage events. Frontends
-        # often prefer to drop these (they echoed them already).
-        self.show_user_messages = (
-            os.getenv("CCMUX_SHOW_USER_MESSAGES", "true").lower() != "false"
         )
 
         logger.debug(
