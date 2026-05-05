@@ -84,13 +84,16 @@ class StateMonitor:
             return_exceptions=True,
         )
         for b, result in zip(bindings, results):
-            if isinstance(result, Exception):
-                logger.debug(
-                    "fast_tick classify error for %s: %s",
-                    b.tmux_session_name,
-                    result,
-                )
-                continue
+            if isinstance(result, BaseException):
+                if isinstance(result, Exception):
+                    logger.debug(
+                        "fast_tick classify error for %s: %s",
+                        b.tmux_session_name,
+                        result,
+                    )
+                    continue
+                # KeyboardInterrupt / SystemExit — propagate.
+                raise result
             if result is not None:
                 await self._on_state(b.tmux_session_name, result)
 

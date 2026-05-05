@@ -9,6 +9,48 @@ require a major bump.
 
 ## [Unreleased]
 
+## 5.0.0 — 2026-05-05
+
+Major version bump. Breaking changes batched together for a single
+migration cost.
+
+### Removed
+
+- `Config.show_user_messages` and `CCMUX_SHOW_USER_MESSAGES` env
+  var. The toggle moves to the frontend (presentation policy is
+  not a backend concern).
+- `MessageMonitor.__init__` no longer accepts `show_user_messages`.
+- `DefaultBackend.__init__` no longer accepts `show_user_messages`.
+- Loader no longer reads `~/.ccmux/.env`. Backend reads only
+  `settings.env` (cwd, then `$CCMUX_DIR/settings.env`). Backend has
+  no secrets, so `.env` is reserved for the frontend.
+
+### Changed
+
+- User-typed messages (JSONL `role=="user"`) are always emitted as
+  `ClaudeMessage` events. Frontends decide whether to display them.
+
+### Fixed
+
+- `state_monitor.fast_tick`: narrow `BaseException` in
+  `asyncio.gather(return_exceptions=True)` results so pyright is
+  satisfied; also propagate `KeyboardInterrupt` / `SystemExit`
+  instead of silently swallowing them.
+
+### Migration
+
+```bash
+# One-shot. Run before upgrading to v5.0.0.
+grep '^CCMUX_' ~/.ccmux/.env > ~/.ccmux/settings.env
+sed -i '/^CCMUX_/d' ~/.ccmux/.env
+```
+
+After this, `~/.ccmux/.env` contains only secrets (consumed by
+frontend packages), `~/.ccmux/settings.env` contains all `CCMUX_*`
+operational settings.
+
+Frontend package `ccmux-telegram` v5.1.0+ depends on this version.
+
 ## 4.0.1 — 2026-04-28
 
 ### Performance
