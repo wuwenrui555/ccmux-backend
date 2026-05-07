@@ -9,6 +9,15 @@ require a major bump.
 
 ## [Unreleased]
 
+## 5.1.1 — 2026-05-07
+
+### Added
+
+- Optional `ClaudeMessage.input` field carrying raw tool args for
+  `AskUserQuestion` / `ExitPlanMode` `tool_use` entries; populated only
+  for those tools, `None` otherwise. Enables downstream consumers to
+  render prompt UIs without re-reading JSONL when pane capture fails.
+
 ## 5.1.0 — 2026-05-07
 
 ### Changed
