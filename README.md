@@ -161,6 +161,7 @@ Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env`
 - `CCMUX_MONITOR_POLL_INTERVAL` (default `0.5`) — fast-loop tick in seconds
 - `CCMUX_CLAUDE_PROC_NAMES` (default `claude,node`) — comma-separated pane foreground process names counted as "Claude is alive". Override if a Claude Code release switches runtimes (e.g. to Bun) and the liveness checker starts flagging every window as dead. See [Claude Code compatibility](docs/claude-code-compat.md).
 - `CCMUX_STATE_LOG` — set to `1` / `true` / `yes` / `on` to enable per-tick observation logging. When enabled, every `fast_tick` observation `(pane_text, state)` is appended to `$CCMUX_DIR/state.jsonl` (default `~/.ccmux/state.jsonl`); consecutive ticks with identical pane text for the same instance are collapsed into a single record with `first_seen`, `last_seen`, and `tick_count`. Unset / falsy: no logging, zero overhead. See [`docs/superpowers/specs/2026-05-07-ccmux-state-log-design.md`](docs/superpowers/specs/2026-05-07-ccmux-state-log-design.md) for the record schema and intended workflow.
+- `CCMUX_STATE_SNAPSHOT` — set to `1` / `true` / `yes` / `on` to enable real-time state snapshot. When enabled, every `fast_tick` observation overwrites `$CCMUX_DIR/state_current.json` (default `~/.ccmux/state_current.json`) with a JSON map `{instance_id -> {state, window_id, last_seen}}`. `pane_text` is intentionally omitted; consumers that need raw pane content can run `tmux capture-pane` themselves. Independent of `CCMUX_STATE_LOG`. Unset / falsy: no snapshot, zero overhead.
 
 `DefaultBackend(show_user_messages=…)` takes precedence over the env var.
 
@@ -174,6 +175,7 @@ Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env`
 - `hook.log` — appended by the `ccmux hook` CLI on every invocation; captures unhandled tracebacks for postmortems after Claude Code's inline error banner scrolls away
 - `parser_config.json` — optional; overrides brittle Claude Code parser constants without a backend release. See [Claude Code compatibility](docs/claude-code-compat.md).
 - `state.jsonl` — only created when `CCMUX_STATE_LOG=1`; one record per pane-text screen segment per instance, used as a corpus for parser-pattern mining
+- `state_current.json` — only created when `CCMUX_STATE_SNAPSHOT=1`; atomic-rewrite snapshot of every tracked instance's current state, keyed by `instance_id`. Polled by external monitoring tools.
 
 ### Frontends
 
