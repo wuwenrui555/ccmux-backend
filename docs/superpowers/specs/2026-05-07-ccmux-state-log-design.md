@@ -75,7 +75,7 @@ ccmux-backend/
   src/ccmux/
     state_log.py          NEW. StateLog class: open file, dedup, write JSONL.
     state_monitor.py      MODIFIED. Optional state_log parameter; calls record().
-    backend.py            MODIFIED. Reads CCMUX_STATE_LOG_PATH env var; injects.
+    backend.py            MODIFIED. Reads CCMUX_STATE_LOG env var; injects.
   tests/
     test_state_log.py     NEW. Unit tests for the StateLog class.
     test_state_monitor.py MODIFIED. One additional test verifying the
@@ -183,8 +183,10 @@ await self._on_state(b.tmux_session_name, state)
 reads the env var and injects:
 
 ```python
-log_path = os.getenv("CCMUX_STATE_LOG_PATH", "").strip()
-state_log = StateLog(log_path) if log_path else None
+if os.getenv("CCMUX_STATE_LOG", "").strip().lower() in {"1", "true", "yes", "on"}:
+    state_log = StateLog(ccmux_dir() / "state.jsonl")
+else:
+    state_log = None
 self._state_monitor = StateMonitor(
     event_reader=...,
     tmux_registry=...,
@@ -193,9 +195,11 @@ self._state_monitor = StateMonitor(
 )
 ```
 
-If the env var path's parent directory does not exist, `StateLog.__init__`
-raises `FileNotFoundError` immediately — we don't silently `mkdir` because the
-caller may have typed the path wrong.
+`StateLog.__init__` calls `parent.mkdir(parents=True, exist_ok=True)` on
+its target path. The path is always under `$CCMUX_DIR`, which the rest
+of the system also creates on demand (`hook.log`, `claude_events.jsonl`,
+etc. follow the same pattern), so the caller does not need to
+pre-provision the directory.
 
 `StateLog.close()` is awaited at the end of `DefaultBackend.stop()`
 (`src/ccmux/backend.py:293`), after the fast/slow tasks are cancelled and the
@@ -312,12 +316,18 @@ number of instances (typically single digits), so a single lock is plenty.
 
 | Env var | Effect |
 |---|---|
-| `CCMUX_STATE_LOG_PATH` unset or empty | `state_log=None`, no logging, zero overhead. |
-| `CCMUX_STATE_LOG_PATH=/path/to/log.jsonl` | Logger constructed; appends to that file. |
+| `CCMUX_STATE_LOG` unset or falsy (`""`, `"0"`, `"false"`, `"no"`, `"off"`, anything else) | `state_log=None`, no logging, zero overhead. |
+| `CCMUX_STATE_LOG=1` (also `true` / `yes` / `on`, case-insensitive) | Logger constructed; appends to `$CCMUX_DIR/state.jsonl` (default `~/.ccmux/state.jsonl`). |
 
-This matches the existing pattern set by `CCMUX_CLAUDE_PROC_NAMES` in
-`state_monitor.py`. Documented in the README under the existing "Configuration
-via env vars" section (if present; otherwise added there).
+This aligns with the `hook.log` / `ccmux.log` / `drift.log` convention:
+filename is fixed, location is `$CCMUX_DIR`, and the directory is
+created on demand. The toggle is a simple boolean (`CCMUX_STATE_LOG=1`)
+because — unlike `hook.log` / `ccmux.log`, which are sparse and
+always-on — `state.jsonl` writes per-tick observations and accumulates
+fast enough that always-on would surprise users on disk usage. Reading
+priority: the toggle is loaded by `Config` from process env, then from
+cwd `settings.env`, then from `$CCMUX_DIR/settings.env` (already wired
+up; no code added for the priority chain).
 
 ## Testing
 
@@ -334,7 +344,7 @@ via env vars" section (if present; otherwise added there).
 - Each line of the file is valid JSON with the expected schema (sample-check
   one of each `ClaudeState` variant).
 - `BlockedUI` enum value serializes as its string name, not its int.
-- Path with non-existent parent dir → `FileNotFoundError` from `__init__`.
+- Path with non-existent parent dir → `__init__` creates it (`parents=True, exist_ok=True`); subsequent `record()` writes succeed.
 - Re-opening an existing file appends rather than truncating.
 
 `tests/test_state_monitor.py` (modified):

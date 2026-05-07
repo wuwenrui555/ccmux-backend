@@ -31,6 +31,7 @@ from .message_monitor import MessageMonitor
 from .state_log import StateLog
 from .state_monitor import StateMonitor, _claude_proc_names
 from .tmux import TmuxSessionRegistry, TmuxWindow
+from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
 
@@ -175,12 +176,15 @@ class _ClaudeOpsImpl:
         )
 
 
+_TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+
+
 def _build_state_log() -> StateLog | None:
-    """Return a StateLog if CCMUX_STATE_LOG_PATH is set and non-empty, else None."""
-    path = os.getenv("CCMUX_STATE_LOG_PATH", "").strip()
-    if not path:
+    """Return a StateLog at ``$CCMUX_DIR/state.jsonl`` if ``CCMUX_STATE_LOG`` is truthy, else None."""
+    raw = os.getenv("CCMUX_STATE_LOG", "").strip().lower()
+    if raw not in _TRUTHY_ENV_VALUES:
         return None
-    return StateLog(path)
+    return StateLog(ccmux_dir() / "state.jsonl")
 
 
 class DefaultBackend:
@@ -211,8 +215,6 @@ class DefaultBackend:
         self._tmux_registry = tmux_registry
 
         if event_reader is None:
-            from .util import ccmux_dir
-
             event_reader = EventLogReader(ccmux_dir() / "claude_events.jsonl")
         self.event_reader: EventLogReader = event_reader
 

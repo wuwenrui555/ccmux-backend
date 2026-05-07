@@ -1,4 +1,4 @@
-"""Wiring tests for CCMUX_STATE_LOG_PATH env-var driven state log."""
+"""Wiring tests for CCMUX_STATE_LOG env-var toggle."""
 
 from __future__ import annotations
 
@@ -9,29 +9,51 @@ import pytest
 from ccmux.state_log import StateLog
 
 
-class TestEnvVarConstruction:
+class TestEnvVarToggle:
     def test_unset_env_var_yields_no_state_log(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("CCMUX_STATE_LOG_PATH", raising=False)
+        monkeypatch.delenv("CCMUX_STATE_LOG", raising=False)
         from ccmux.backend import _build_state_log
 
         assert _build_state_log() is None
 
-    def test_empty_env_var_yields_no_state_log(
+    def test_falsy_env_var_yields_no_state_log(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("CCMUX_STATE_LOG_PATH", "   ")
-        from ccmux.backend import _build_state_log
+        for value in ("", "   ", "0", "false", "no", "off", "garbage"):
+            monkeypatch.setenv("CCMUX_STATE_LOG", value)
+            from ccmux.backend import _build_state_log
 
-        assert _build_state_log() is None
+            assert _build_state_log() is None, f"value {value!r} should disable"
 
-    def test_env_var_set_yields_state_log(
+    def test_truthy_env_var_yields_state_log_under_ccmux_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        log_path = tmp_path / "state.jsonl"
-        monkeypatch.setenv("CCMUX_STATE_LOG_PATH", str(log_path))
+        monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
+        for value in ("1", "true", "yes", "on", "TRUE", "On"):
+            monkeypatch.setenv("CCMUX_STATE_LOG", value)
+            from ccmux.backend import _build_state_log
+
+            log = _build_state_log()
+            assert isinstance(log, StateLog), f"value {value!r} should enable"
+            assert log._path == tmp_path / "state.jsonl"
+            # Close so we can re-open in the next iteration without leaking fds.
+            import asyncio
+
+            asyncio.run(log.close())
+
+    def test_parent_dir_created_if_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        ccmux_dir = tmp_path / "fresh-dir-that-does-not-exist"
+        monkeypatch.setenv("CCMUX_DIR", str(ccmux_dir))
+        monkeypatch.setenv("CCMUX_STATE_LOG", "1")
         from ccmux.backend import _build_state_log
 
         log = _build_state_log()
         assert isinstance(log, StateLog)
+        assert ccmux_dir.is_dir()
+        import asyncio
+
+        asyncio.run(log.close())

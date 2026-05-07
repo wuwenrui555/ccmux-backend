@@ -197,9 +197,17 @@ class TestStateLogSingleInstance:
         records = _read_jsonl(log_path)
         assert [r["pane_text"] for r in records] == ["first", "second"]
 
-    def test_init_raises_when_parent_dir_missing(self, tmp_path: Path) -> None:
-        with pytest.raises(FileNotFoundError):
-            StateLog(tmp_path / "missing-dir" / "state.jsonl")
+    @pytest.mark.asyncio
+    async def test_init_creates_parent_dir_if_missing(self, tmp_path: Path) -> None:
+        nested = tmp_path / "missing-dir" / "state.jsonl"
+        log = StateLog(nested)
+        try:
+            await log.record(
+                instance_id="a", window_id="@1", pane_text="x", state=Idle()
+            )
+        finally:
+            await log.close()
+        assert nested.exists()
 
     @pytest.mark.asyncio
     async def test_emitted_lines_are_valid_json(self, log_path: Path) -> None:

@@ -160,7 +160,7 @@ Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env`
 - `CCMUX_SHOW_USER_MESSAGES` (default `true`) — emit user-typed messages as events
 - `CCMUX_MONITOR_POLL_INTERVAL` (default `0.5`) — fast-loop tick in seconds
 - `CCMUX_CLAUDE_PROC_NAMES` (default `claude,node`) — comma-separated pane foreground process names counted as "Claude is alive". Override if a Claude Code release switches runtimes (e.g. to Bun) and the liveness checker starts flagging every window as dead. See [Claude Code compatibility](docs/claude-code-compat.md).
-- `CCMUX_STATE_LOG_PATH` — path to a JSONL file. When set, every `fast_tick` observation `(pane_text, state)` is recorded; consecutive ticks with identical pane text for the same instance are collapsed into a single record with `first_seen`, `last_seen`, and `tick_count`. Unset / empty: no logging, zero overhead. The parent directory must already exist. See [`docs/superpowers/specs/2026-05-07-ccmux-state-log-design.md`](docs/superpowers/specs/2026-05-07-ccmux-state-log-design.md) for the record schema and intended workflow.
+- `CCMUX_STATE_LOG` — set to `1` / `true` / `yes` / `on` to enable per-tick observation logging. When enabled, every `fast_tick` observation `(pane_text, state)` is appended to `$CCMUX_DIR/state.jsonl` (default `~/.ccmux/state.jsonl`); consecutive ticks with identical pane text for the same instance are collapsed into a single record with `first_seen`, `last_seen`, and `tick_count`. Unset / falsy: no logging, zero overhead. See [`docs/superpowers/specs/2026-05-07-ccmux-state-log-design.md`](docs/superpowers/specs/2026-05-07-ccmux-state-log-design.md) for the record schema and intended workflow.
 
 `DefaultBackend(show_user_messages=…)` takes precedence over the env var.
 
@@ -173,6 +173,7 @@ Set in `$CCMUX_DIR/.env` (default `~/.ccmux/.env`) or your shell. A local `.env`
 - `drift.log` — created on first pane-parser drift warning (Claude Code UI change alert)
 - `hook.log` — appended by the `ccmux hook` CLI on every invocation; captures unhandled tracebacks for postmortems after Claude Code's inline error banner scrolls away
 - `parser_config.json` — optional; overrides brittle Claude Code parser constants without a backend release. See [Claude Code compatibility](docs/claude-code-compat.md).
+- `state.jsonl` — only created when `CCMUX_STATE_LOG=1`; one record per pane-text screen segment per instance, used as a corpus for parser-pattern mining
 
 ### Frontends
 

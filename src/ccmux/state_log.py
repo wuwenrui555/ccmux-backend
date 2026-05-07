@@ -1,8 +1,9 @@
 """State log: append-only JSONL recorder for (pane_text, state) observations.
 
-Opt-in via the ``CCMUX_STATE_LOG_PATH`` env var. When the path is set,
-``DefaultBackend`` constructs a ``StateLog`` and injects it into
-``StateMonitor``; ``fast_tick`` calls ``record(...)`` after every
+Always-on under ``ccmux_dir() / "state.jsonl"`` (i.e. ``$CCMUX_DIR`` or
+``~/.ccmux``), matching the ``hook.log`` / ``ccmux.log`` / ``drift.log``
+convention. ``DefaultBackend`` constructs a ``StateLog`` and injects it
+into ``StateMonitor``; ``fast_tick`` calls ``record(...)`` after every
 ``parse_pane`` classification.
 
 Adjacent ticks with identical pane text for the same instance are
@@ -74,17 +75,13 @@ class StateLog:
     by the number of instances, so a single lock is sufficient.
 
     The file handle is opened in ``__init__`` and held for the
-    lifetime of the object. The parent directory must already exist;
-    we do not silently ``mkdir`` because the caller may have typed the
-    path wrong.
+    lifetime of the object. The parent directory is created if needed
+    (mirrors ``hook.log`` / ``ccmux.log`` behavior under ``$CCMUX_DIR``).
     """
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
         p = Path(path)
-        if not p.parent.exists():
-            raise FileNotFoundError(
-                f"State log parent directory does not exist: {p.parent}"
-            )
+        p.parent.mkdir(parents=True, exist_ok=True)
         self._path = p
         self._fh: IO[str] = open(p, "a", encoding="utf-8")
         self._staged: dict[str, _StagedRecord] = {}
