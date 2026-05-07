@@ -24,9 +24,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Awaitable, Callable, Protocol, TYPE_CHECKING
+from typing import Awaitable, Callable, TYPE_CHECKING
 
 from claude_code_state import ClaudeState, Dead, parse_pane
+
+from .state_log import StateObserver
 
 if TYPE_CHECKING:
     from .event_log import CurrentClaudeBinding, EventLogReader
@@ -48,19 +50,6 @@ def _claude_proc_names() -> frozenset[str]:
 OnStateCallback = Callable[[str, ClaudeState], Awaitable[None]]
 
 
-class StateLogProtocol(Protocol):
-    """Subset of ``StateLog`` consumed by ``StateMonitor``."""
-
-    async def record(
-        self,
-        *,
-        instance_id: str,
-        window_id: str,
-        pane_text: str,
-        state: ClaudeState,
-    ) -> None: ...
-
-
 class StateMonitor:
     """Produces ``(instance_id, ClaudeState)`` observations."""
 
@@ -70,12 +59,12 @@ class StateMonitor:
         event_reader: "EventLogReader",
         tmux_registry: "TmuxSessionRegistry",
         on_state: OnStateCallback,
-        state_log: "StateLogProtocol | None" = None,
+        observers: "tuple[StateObserver, ...]" = (),
     ) -> None:
         self._event_reader = event_reader
         self._tmux_registry = tmux_registry
         self._on_state = on_state
-        self._state_log = state_log
+        self._observers = observers
 
     async def fast_tick(self) -> None:
         """Classify each live binding from its pane text; emit or skip.
@@ -107,9 +96,9 @@ class StateMonitor:
             if result is None:
                 continue
             pane_text, state = result
-            if self._state_log is not None:
+            for obs in self._observers:
                 try:
-                    await self._state_log.record(
+                    await obs.record(
                         instance_id=b.tmux_session_name,
                         window_id=b.window_id,
                         pane_text=pane_text,
@@ -117,7 +106,10 @@ class StateMonitor:
                     )
                 except Exception as e:
                     logger.debug(
-                        "state_log record error for %s: %s", b.tmux_session_name, e
+                        "observer %s record error for %s: %s",
+                        type(obs).__name__,
+                        b.tmux_session_name,
+                        e,
                     )
             await self._on_state(b.tmux_session_name, state)
 
