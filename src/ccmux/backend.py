@@ -27,10 +27,32 @@ from .claude_transcript_parser import ClaudeMessage
 from .config import config
 from .event_log import CurrentClaudeBinding, EventLogReader
 from .message_monitor import MessageMonitor
-from .state_monitor import StateMonitor
+from .state_monitor import StateMonitor, _claude_proc_names
 from .tmux import TmuxSessionRegistry, TmuxWindow
 
 logger = logging.getLogger(__name__)
+
+# Auto-resume verification + circuit breaker.
+#
+# ``_try_resume`` is fire-and-forget by construction: tmux returns success as
+# soon as ``claude --resume <id>`` has been typed into the new window's pane,
+# not when claude has actually started. If the resumed claude exits
+# immediately (bad session id, expired auth, missing cwd, network blip), the
+# new window quickly drops back to a shell prompt. The next slow tick then
+# observes Dead again and creates yet another window — a runaway loop, one
+# new window per ``slow_interval``.
+#
+# We close the loop in two steps:
+#   1. After ``create_window``, poll the new window's foreground command
+#      until either claude/node appears (success) or ``RESUME_VERIFY_TIMEOUT``
+#      elapses (failure).
+#   2. Track consecutive verification failures per instance. After
+#      ``MAX_RESUME_FAILURES`` in a row, stop auto-resuming that instance.
+#      The Dead state stays visible to the frontend so the user can recover
+#      manually; a successful resume resets the counter.
+RESUME_VERIFY_TIMEOUT: float = 10.0
+RESUME_VERIFY_POLL: float = 1.0
+MAX_RESUME_FAILURES: int = 3
 
 
 class TmuxOps(Protocol):
@@ -192,6 +214,7 @@ class DefaultBackend:
         self._fast_task: asyncio.Task[None] | None = None
         self._slow_task: asyncio.Task[None] | None = None
         self._resuming: set[str] = set()
+        self._resume_failures: dict[str, int] = {}
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
@@ -294,6 +317,12 @@ class DefaultBackend:
         if instance_id in self._resuming:
             logger.debug("resume already in flight for %s; skipping", instance_id)
             return
+        if self._resume_failures.get(instance_id, 0) >= MAX_RESUME_FAILURES:
+            logger.debug(
+                "auto-resume circuit breaker tripped for %s; skipping",
+                instance_id,
+            )
+            return
         self._resuming.add(instance_id)
         try:
             binding = self.event_reader.get(instance_id)
@@ -310,16 +339,75 @@ class DefaultBackend:
             ok, msg, _, new_wid = await tm.create_window(
                 work_dir=cwd, resume_session_id=binding.claude_session_id
             )
-            if ok:
+            if not ok:
+                failures = self._bump_resume_failure(instance_id)
+                logger.warning(
+                    "Failed to resume %s: %s (failures=%d)",
+                    binding.claude_session_id,
+                    msg,
+                    failures,
+                )
+                if failures >= MAX_RESUME_FAILURES:
+                    logger.error(
+                        "Auto-resume disabled for %s after %d consecutive "
+                        "failures; Dead state will remain visible until you "
+                        "intervene manually",
+                        instance_id,
+                        failures,
+                    )
+                return
+
+            if await self._verify_resume(tm, new_wid):
+                self._resume_failures.pop(instance_id, None)
                 logger.info(
                     "Resumed %s in window %s", binding.claude_session_id, new_wid
                 )
             else:
+                failures = self._bump_resume_failure(instance_id)
                 logger.warning(
-                    "Failed to resume %s: %s", binding.claude_session_id, msg
+                    "Resume verification failed for %s in window %s; claude "
+                    "did not appear within %.1fs (failures=%d)",
+                    instance_id,
+                    new_wid,
+                    RESUME_VERIFY_TIMEOUT,
+                    failures,
                 )
+                if failures >= MAX_RESUME_FAILURES:
+                    logger.error(
+                        "Auto-resume disabled for %s after %d consecutive "
+                        "failures; Dead state will remain visible until you "
+                        "intervene manually",
+                        instance_id,
+                        failures,
+                    )
         finally:
             self._resuming.discard(instance_id)
+
+    async def _verify_resume(
+        self,
+        tm,
+        window_id: str,
+        *,
+        timeout: float = RESUME_VERIFY_TIMEOUT,
+        poll: float = RESUME_VERIFY_POLL,
+    ) -> bool:
+        """Poll the new window until claude/node appears or timeout elapses."""
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        proc_names = _claude_proc_names()
+        while loop.time() < deadline:
+            await asyncio.sleep(poll)
+            w = await tm.find_window_by_id(window_id)
+            if w is None:
+                return False
+            if w.pane_current_command in proc_names:
+                return True
+        return False
+
+    def _bump_resume_failure(self, instance_id: str) -> int:
+        n = self._resume_failures.get(instance_id, 0) + 1
+        self._resume_failures[instance_id] = n
+        return n
 
 
 # --- Module-level default singleton --------------------------------------
