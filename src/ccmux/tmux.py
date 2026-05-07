@@ -266,6 +266,12 @@ class TmuxSession:
         -------
         str or None
             The captured text, or None on failure.
+
+        Notes
+        -----
+        Default ``tmux capture-pane`` returns the live tail of the pane
+        buffer, not the user's scrolled-to position in copy mode
+        (verified on tmux 3.5).
         """
         if with_ansi:
             # Use async subprocess to call tmux capture-pane -e for ANSI colors
