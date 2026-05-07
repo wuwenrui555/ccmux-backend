@@ -9,6 +9,34 @@ require a major bump.
 
 ## [Unreleased]
 
+## 5.1.2 — 2026-05-07
+
+### Fixed
+
+- Auto-resume no longer creates a new tmux window every slow tick when
+  `claude --resume <id>` fails to keep claude alive. Previously,
+  `_try_resume` was fire-and-forget: it returned success as soon as
+  the resume command was typed into the new pane, never checking
+  whether claude actually came up. If the resumed claude exited
+  immediately (bad session id, expired auth, missing cwd, transient
+  network failure), the next slow tick observed Dead again and
+  created yet another window — `name`, `name-2`, `name-3`, ... —
+  one per `slow_interval`.
+
+  Two changes close the loop:
+  1. After `create_window`, poll the new window's foreground command
+     for up to `RESUME_VERIFY_TIMEOUT` (10 s); if claude/node never
+     appears, treat the resume as failed.
+  2. Track consecutive failures per instance. After
+     `MAX_RESUME_FAILURES` (3) in a row, stop auto-resuming that
+     instance. The Dead state stays visible to the frontend so the
+     user can recover manually; a successful resume resets the
+     counter.
+
+  Counters are in-memory only. A backend restart resets all counters
+  to zero, so the first failure after a restart will retry once
+  before the breaker re-arms.
+
 ## 5.1.1 — 2026-05-07
 
 ### Added
