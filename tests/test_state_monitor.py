@@ -187,6 +187,85 @@ class TestClassification:
         assert seen == []
 
 
+class TestStateLogIntegration:
+    @pytest.mark.asyncio
+    async def test_fast_tick_calls_state_log_record(self, chrome: str) -> None:
+        from ccmux.state_log import StateLog  # noqa: F401  (import locality)
+
+        b = _binding()
+        pane = f"some output\n✽ Thinking… (3s)\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen_state: list[tuple[str, ClaudeState]] = []
+        recorded: list[dict[str, Any]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen_state.append((instance_id, state))
+
+        class _FakeStateLog:
+            async def record(
+                self,
+                *,
+                instance_id: str,
+                window_id: str,
+                pane_text: str,
+                state: ClaudeState,
+            ) -> None:
+                recorded.append(
+                    {
+                        "instance_id": instance_id,
+                        "window_id": window_id,
+                        "pane_text": pane_text,
+                        "state": state,
+                    }
+                )
+
+            async def close(self) -> None:
+                pass
+
+        mon = StateMonitor(
+            event_reader=reader,
+            tmux_registry=tmux,
+            on_state=on_state,
+            state_log=_FakeStateLog(),
+        )
+        await mon.fast_tick()
+
+        assert len(recorded) == 1
+        assert recorded[0]["instance_id"] == "a"
+        assert recorded[0]["window_id"] == "@1"
+        assert recorded[0]["pane_text"] == pane
+        assert isinstance(recorded[0]["state"], Working)
+        # on_state still fires.
+        assert len(seen_state) == 1
+
+    @pytest.mark.asyncio
+    async def test_fast_tick_with_no_state_log_works_unchanged(
+        self, chrome: str
+    ) -> None:
+        b = _binding()
+        pane = f"output\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen: list[tuple[str, ClaudeState]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        # No state_log argument — default is None.
+        mon = StateMonitor(event_reader=reader, tmux_registry=tmux, on_state=on_state)
+        await mon.fast_tick()
+        assert len(seen) == 1
+
+
 class TestSkipRules:
     @pytest.mark.asyncio
     async def test_skip_when_window_missing(self) -> None:
