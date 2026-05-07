@@ -9,6 +9,17 @@ require a major bump.
 
 ## [Unreleased]
 
+## 5.1.3 — 2026-05-07
+
+### Changed
+
+- Bumped `claude-code-state` dependency to `v0.3.1`. That release
+  fixes a parser false-positive where AskUserQuestion's "Chat about
+  this" cursor row was misclassified as input chrome, which made
+  downstream consumers drop the Blocked state mid-prompt the moment
+  the user navigated to the chat row. No surface changes here; the
+  pin alone delivers the fix to anyone using `parse_pane`.
+
 ## 5.1.2 — 2026-05-07
 
 ### Fixed
