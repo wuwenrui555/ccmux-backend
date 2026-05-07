@@ -116,7 +116,9 @@ class StateMonitor:
                         state=state,
                     )
                 except Exception as e:
-                    logger.debug("state_log record error for %s: %s", b.tmux_session_name, e)
+                    logger.debug(
+                        "state_log record error for %s: %s", b.tmux_session_name, e
+                    )
             await self._on_state(b.tmux_session_name, state)
 
     async def slow_tick(self) -> None:

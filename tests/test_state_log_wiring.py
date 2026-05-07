@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 import pytest
@@ -12,13 +10,17 @@ from ccmux.state_log import StateLog
 
 
 class TestEnvVarConstruction:
-    def test_unset_env_var_yields_no_state_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_unset_env_var_yields_no_state_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("CCMUX_STATE_LOG_PATH", raising=False)
         from ccmux.backend import _build_state_log
 
         assert _build_state_log() is None
 
-    def test_empty_env_var_yields_no_state_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_empty_env_var_yields_no_state_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CCMUX_STATE_LOG_PATH", "   ")
         from ccmux.backend import _build_state_log
 

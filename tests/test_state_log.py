@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from claude_code_state import Blocked, BlockedUI, Dead, Idle, Working
 
-from ccmux.state_log import _serialize_state
+from ccmux.state_log import StateLog, _serialize_state
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 class TestSerializeState:
@@ -44,20 +53,6 @@ class TestSerializeState:
         ):
             d = _serialize_state(s)
             json.dumps(d)
-
-
-import asyncio
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-
-from ccmux.state_log import StateLog
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 class TestStateLogSingleInstance:
@@ -265,9 +260,7 @@ class TestStateLogMultiInstance:
         # Order in file is: A1 (flushed early), then close-time flush of dict.
         # The remaining two are 'a' A2 and 'b' B1; their order depends on
         # dict iteration. Assert by membership rather than order.
-        remaining = sorted(
-            (r["instance_id"], r["pane_text"]) for r in records[1:]
-        )
+        remaining = sorted((r["instance_id"], r["pane_text"]) for r in records[1:])
         assert remaining == [("a", "A2"), ("b", "B1")]
 
 

@@ -13,10 +13,18 @@ for that instance, or when ``close()`` is called at shutdown.
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Any
+import asyncio
+import json
+import logging
+import os
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import IO, Any
 
 from claude_code_state import ClaudeState
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_state(state: ClaudeState) -> dict[str, Any]:
@@ -30,18 +38,6 @@ def _serialize_state(state: ClaudeState) -> dict[str, Any]:
     payload: dict[str, Any] = {"type": type(state).__name__}
     payload.update(asdict(state))
     return payload
-
-
-import asyncio
-import json
-import logging
-import os
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import IO
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
