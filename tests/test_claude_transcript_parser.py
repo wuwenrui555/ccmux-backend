@@ -567,3 +567,119 @@ class TestParseEntries:
         )
         user_entries = [e for e in result if e.role == "user"]
         assert len(user_entries) == 0
+
+
+# ── ClaudeMessage.input passthrough for prompt tools ─────────────────────
+
+
+class TestPromptToolInputPassthrough:
+    """`tool_use.input` is propagated onto `ClaudeMessage.input` only for the
+    whitelisted prompt tools (AskUserQuestion / ExitPlanMode); every other
+    tool gets `input is None` so non-prompt payloads (Edit / Bash bodies)
+    are never carried to downstream consumers.
+    """
+
+    def test_ask_user_question_input_passthrough(
+        self, make_jsonl_entry, make_tool_use_block
+    ):
+        auq_input = {
+            "questions": [
+                {
+                    "question": "Which option?",
+                    "header": "Pick one",
+                    "options": [
+                        {"label": "A", "description": "first"},
+                        {"label": "B", "description": "second"},
+                    ],
+                    "multiSelect": False,
+                }
+            ]
+        }
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_tool_use_block("t1", "AskUserQuestion", auq_input)],
+            )
+        ]
+        # Stream mode (pending_tools={}): the message monitor's production
+        # path. Single immediate tool_use entry, no end-of-batch flush.
+        result, _pending, _trailing = TranscriptParser.parse_entries(
+            entries, session_id="test-session", pending_tools={}
+        )
+        tool_uses = [e for e in result if e.content_type == "tool_use"]
+        assert len(tool_uses) == 1
+        assert tool_uses[0].tool_name == "AskUserQuestion"
+        assert tool_uses[0].input == auq_input
+
+        # History mode (pending_tools=None, default): both the immediate
+        # emission and the end-of-batch flush carry the same `input`.
+        result_hist, _pending2, _trailing2 = TranscriptParser.parse_entries(
+            entries, session_id="test-session"
+        )
+        tool_uses_hist = [e for e in result_hist if e.content_type == "tool_use"]
+        assert len(tool_uses_hist) == 2
+        assert all(e.input == auq_input for e in tool_uses_hist)
+
+    def test_exit_plan_mode_input_passthrough(
+        self, make_jsonl_entry, make_tool_use_block
+    ):
+        plan_input = {"plan": "Step 1: do X\nStep 2: do Y"}
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_tool_use_block("t1", "ExitPlanMode", plan_input)],
+            )
+        ]
+        # Stream mode (pending_tools={}): the message monitor's production
+        # path. Single immediate tool_use entry, no end-of-batch flush.
+        result, _pending, _trailing = TranscriptParser.parse_entries(
+            entries, session_id="test-session", pending_tools={}
+        )
+        tool_uses = [e for e in result if e.content_type == "tool_use"]
+        assert len(tool_uses) == 1
+        assert tool_uses[0].tool_name == "ExitPlanMode"
+        assert tool_uses[0].input == plan_input
+
+        # History mode: same input on every tool_use entry that gets emitted
+        # (immediate + flush, since there is no matching tool_result).
+        result_hist, _pending2, _trailing2 = TranscriptParser.parse_entries(
+            entries, session_id="test-session"
+        )
+        tool_uses_hist = [e for e in result_hist if e.content_type == "tool_use"]
+        assert len(tool_uses_hist) == 2
+        assert all(e.input == plan_input for e in tool_uses_hist)
+
+    @pytest.mark.parametrize(
+        "tool_name, input_data",
+        [
+            ("Read", {"file_path": "x.py"}),
+            ("Bash", {"command": "ls -la"}),
+            (
+                "Edit",
+                {
+                    "file_path": "x.py",
+                    "old_string": "old",
+                    "new_string": "new",
+                },
+            ),
+        ],
+        ids=["read", "bash", "edit"],
+    )
+    def test_non_prompt_tool_input_is_none(
+        self, make_jsonl_entry, make_tool_use_block, tool_name: str, input_data: dict
+    ):
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_tool_use_block("t1", tool_name, input_data)],
+            )
+        ]
+        # Stream mode (pending_tools={}): the message monitor's production
+        # path. Single immediate tool_use entry, no end-of-batch flush.
+        result, _pending, _trailing = TranscriptParser.parse_entries(
+            entries, session_id="test-session", pending_tools={}
+        )
+        tool_uses = [e for e in result if e.content_type == "tool_use"]
+        assert len(tool_uses) == 1
+        assert tool_uses[0].tool_name == tool_name
+        assert tool_uses[0].input is None
