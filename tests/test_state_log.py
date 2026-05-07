@@ -224,3 +224,83 @@ class TestStateLogSingleInstance:
         for line in log_path.read_text().splitlines():
             assert line.strip()
             json.loads(line)
+
+
+class TestStateLogMultiInstance:
+    @pytest.fixture
+    def log_path(self, tmp_path: Path) -> Path:
+        return tmp_path / "state.jsonl"
+
+    @pytest.mark.asyncio
+    async def test_two_instances_independently_staged(self, log_path: Path) -> None:
+        log = StateLog(log_path)
+        try:
+            await log.record(
+                instance_id="a", window_id="@1", pane_text="A1", state=Idle()
+            )
+            await log.record(
+                instance_id="b", window_id="@2", pane_text="B1", state=Idle()
+            )
+            await log.record(
+                instance_id="a", window_id="@1", pane_text="A1", state=Idle()
+            )
+            # Both have only one staged record; nothing written yet.
+            assert _read_jsonl(log_path) == []
+
+            # 'a' changes pane: only 'a' flushes, 'b' stays staged.
+            await log.record(
+                instance_id="a", window_id="@1", pane_text="A2", state=Idle()
+            )
+            records = _read_jsonl(log_path)
+            assert len(records) == 1
+            assert records[0]["instance_id"] == "a"
+            assert records[0]["pane_text"] == "A1"
+            assert records[0]["tick_count"] == 2
+        finally:
+            await log.close()
+
+        # close() flushed remaining staged records ('b' B1, 'a' A2).
+        records = _read_jsonl(log_path)
+        assert len(records) == 3
+        # Order in file is: A1 (flushed early), then close-time flush of dict.
+        # The remaining two are 'a' A2 and 'b' B1; their order depends on
+        # dict iteration. Assert by membership rather than order.
+        remaining = sorted(
+            (r["instance_id"], r["pane_text"]) for r in records[1:]
+        )
+        assert remaining == [("a", "A2"), ("b", "B1")]
+
+
+class TestStateLogConcurrency:
+    @pytest.fixture
+    def log_path(self, tmp_path: Path) -> Path:
+        return tmp_path / "state.jsonl"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_records_no_torn_lines(self, log_path: Path) -> None:
+        log = StateLog(log_path)
+        try:
+            # Each instance toggles between two pane texts so every other
+            # call flushes a record. Run 50 instances * 4 calls = 200
+            # record() invocations concurrently.
+            async def hammer(i: int) -> None:
+                for j in range(4):
+                    await log.record(
+                        instance_id=f"i{i}",
+                        window_id=f"@{i}",
+                        pane_text=f"v{j % 2}",
+                        state=Idle(),
+                    )
+
+            await asyncio.gather(*(hammer(i) for i in range(50)))
+        finally:
+            await log.close()
+
+        # Every line must be valid JSON (no torn writes).
+        lines = log_path.read_text().splitlines()
+        for line in lines:
+            assert line.strip()
+            json.loads(line)
+        # Every instance contributes at least one record.
+        instance_ids = {json.loads(line)["instance_id"] for line in lines}
+        assert instance_ids == {f"i{i}" for i in range(50)}
