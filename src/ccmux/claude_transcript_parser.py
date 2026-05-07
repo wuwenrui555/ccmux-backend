@@ -28,6 +28,12 @@ from claude_code_state import config as _pc
 
 logger = logging.getLogger(__name__)
 
+# Tools whose `tool_use.input` payload is propagated onto `ClaudeMessage.input`
+# for downstream consumers. Mirrors `ccmux_telegram.prompt_state.PROMPT_TOOL_NAMES`.
+# Kept narrow on purpose — non-prompt tool args can be large or sensitive
+# (Edit / Bash payloads) so we whitelist instead of blacklist.
+_PROMPT_TOOL_INPUT_PASSTHROUGH = frozenset({"AskUserQuestion", "ExitPlanMode"})
+
 
 @dataclass
 class ClaudeMessage:
@@ -52,6 +58,7 @@ class ClaudeMessage:
     text: str  # Formatted display text
     tool_use_id: str | None = None
     tool_name: str | None = None  # For tool_use and tool_result entries
+    input: dict | None = None  # Raw tool args; populated only for prompt tools
     image_data: list[tuple[str, bytes]] | None = None  # For tool_result with images
     timestamp: str | None = None  # ISO timestamp (history only)
     is_complete: bool = False  # True on the final stream chunk (real-time only)
@@ -80,6 +87,7 @@ class PendingToolInfo:
     summary: str  # Formatted tool summary (e.g. "**Read**(file.py)")
     tool_name: str  # Tool name (e.g. "Read", "Edit")
     input_data: dict | None = None  # Tool input (for Edit/NotebookEdit diff generation)
+    prompt_input: dict | None = None  # Raw input for prompt-tool passthrough
 
 
 class TranscriptParser:
@@ -574,6 +582,16 @@ class TranscriptParser:
                                         timestamp=entry_timestamp,
                                     )
                                 )
+                        # For prompt-only tools, propagate the raw input dict
+                        # so downstream consumers (e.g. telegram) can render the
+                        # prompt UI without re-reading JSONL when pane capture
+                        # fails. None for every other tool.
+                        input_passthrough = (
+                            inp
+                            if isinstance(inp, dict)
+                            and name in _PROMPT_TOOL_INPUT_PASSTHROUGH
+                            else None
+                        )
                         if tool_id:
                             # Edit/NotebookEdit need the input dict in the
                             # tool_result stage to generate a diff; other tools
@@ -588,6 +606,7 @@ class TranscriptParser:
                                 summary=summary,
                                 tool_name=name,
                                 input_data=input_data,
+                                prompt_input=input_passthrough,
                             )
                             # Also emit tool_use entry with tool_name for immediate handling
                             result.append(
@@ -597,8 +616,9 @@ class TranscriptParser:
                                     text=summary,
                                     content_type="tool_use",
                                     tool_use_id=tool_id,
-                                    timestamp=entry_timestamp,
                                     tool_name=name,
+                                    input=input_passthrough,
+                                    timestamp=entry_timestamp,
                                 )
                             )
                         else:
@@ -609,8 +629,9 @@ class TranscriptParser:
                                     text=summary,
                                     content_type="tool_use",
                                     tool_use_id=tool_id or None,
-                                    timestamp=entry_timestamp,
                                     tool_name=name,
+                                    input=input_passthrough,
+                                    timestamp=entry_timestamp,
                                 )
                             )
 
@@ -833,6 +854,7 @@ class TranscriptParser:
                         content_type="tool_use",
                         tool_use_id=tool_id,
                         tool_name=tool_info.tool_name,
+                        input=tool_info.prompt_input,
                     )
                 )
 
