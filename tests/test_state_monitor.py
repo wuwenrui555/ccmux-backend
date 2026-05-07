@@ -83,7 +83,13 @@ class _FakeReader:
 
 @pytest.fixture
 def chrome() -> str:
-    return "─────────────────────────────\n❯\n─────\nstatusbar"
+    # Real CC chrome is a sandwich: top separator + ❯ prompt line +
+    # bottom separator + statusbar. claude-code-state >= 0.3.1 requires
+    # both separators to be present at full terminal width before
+    # treating the pane as Working/Idle, so the bottom separator must
+    # be the same shape as the top.
+    sep = "─" * 30
+    return f"{sep}\n❯\n{sep}\nstatusbar"
 
 
 # ---- Tests ----------------------------------------------------------------
