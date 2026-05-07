@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from . import parser_config as _pc
+from claude_code_state import config as _pc
 
 logger = logging.getLogger(__name__)
 

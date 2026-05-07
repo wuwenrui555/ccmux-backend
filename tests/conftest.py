@@ -13,13 +13,14 @@ import pytest
 def _isolate_drift_logger():
     """Keep drift warnings out of the real ~/.ccmux/drift.log during tests.
 
-    The drift logger's FileHandler is bound at module import, so without
-    isolation any test that exercises extract_interactive_content on a
-    prompt-like pane (e.g. min_gap regression tests, drift tests) would
-    append to the user's production drift.log. Clear the handler and
-    enable propagation so pytest's caplog (attached to root) still works.
+    The drift logger now lives in ``claude_code_state.parser`` and its
+    FileHandler is bound at module import (gated on
+    ``$CLAUDE_CODE_STATE_DIR``). Clear handlers and enable propagation
+    so pytest's caplog still works and the user's production drift.log
+    is never touched, even when ccmux's import-time bridge sets
+    ``CLAUDE_CODE_STATE_DIR=~/.ccmux``.
     """
-    from ccmux import tmux_pane_parser as T
+    from claude_code_state import parser as T
 
     orig_handlers = list(T.drift_logger.handlers)
     orig_propagate = T.drift_logger.propagate

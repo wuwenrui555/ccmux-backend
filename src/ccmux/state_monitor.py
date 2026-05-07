@@ -26,12 +26,7 @@ import logging
 import os
 from typing import Awaitable, Callable, TYPE_CHECKING
 
-from .claude_state import Blocked, ClaudeState, Dead, Idle, Working
-from .tmux_pane_parser import (
-    extract_interactive_content,
-    has_input_chrome,
-    parse_status_line,
-)
+from claude_code_state import ClaudeState, Dead, parse_pane
 
 if TYPE_CHECKING:
     from .event_log import CurrentClaudeBinding, EventLogReader
@@ -137,18 +132,7 @@ class StateMonitor:
         pane_text = await tm.capture_pane(b.window_id)
         if not pane_text:
             return None
-
-        lines = pane_text.strip().split("\n")
-        if not has_input_chrome(lines):
-            ui = extract_interactive_content(pane_text)
-            if ui is None:
-                return None
-            return Blocked(ui=ui.ui, content=ui.content)
-
-        status_text = parse_status_line(pane_text)
-        if status_text:
-            return Working(status_text=status_text)
-        return Idle()
+        return parse_pane(pane_text)
 
     async def _probe_dead(self, b: "CurrentClaudeBinding") -> bool:
         """True when the tmux window exists but the pane foreground is not claude."""

@@ -9,6 +9,29 @@ require a major bump.
 
 ## [Unreleased]
 
+## 5.1.0 — 2026-05-07
+
+### Changed
+
+- Depend on the external `claude-code-state` package
+  (`@ git+https://github.com/wuwenrui555/claude-code-state.git@v0.3.0`)
+  for pane → ClaudeState classification instead of embedding a local
+  copy. Public `ccmux.api` surface is unchanged.
+- `src/ccmux/__init__.py` now bridges `$CCMUX_DIR` →
+  `$CLAUDE_CODE_STATE_DIR` so `parser_config.json` and `drift.log`
+  continue to live in `~/.ccmux/`.
+- Renamed internal `tmux_pane_parser` → `pane_extras`, retaining only
+  `extract_bash_output`, `parse_usage_output`, and `UsageInfo`. A
+  thin `tmux_pane_parser` shim is kept temporarily so a downstream
+  test fixture that imported `drift_logger` directly keeps working;
+  it will be removed in the next major version.
+
+### Removed
+
+- Internal modules `claude_state` and `parser_config`. These were never
+  part of the public API; consumers always went through `ccmux.api`,
+  which keeps the same names.
+
 ## 5.0.0 — 2026-05-05
 
 Major version bump. Breaking changes batched together for a single
