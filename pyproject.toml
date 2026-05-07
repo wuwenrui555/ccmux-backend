@@ -1,12 +1,13 @@
 [project]
 name = "ccmux"
-version = "5.0.0"
+version = "5.1.0"
 description = "Claude-tmux bridge: mirrors Claude Code sessions in tmux to a stable Python API"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
     "aiofiles>=24.0.0",
+    "claude-code-state @ git+https://github.com/wuwenrui555/claude-code-state.git@v0.3.0",
     "libtmux>=0.37.0",
     "python-dotenv>=1.0.0",
 ]
@@ -26,6 +27,11 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# Required so the git+URL form of `claude-code-state` in
+# [project].dependencies is accepted by hatchling.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ccmux"]

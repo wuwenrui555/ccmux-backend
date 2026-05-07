@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 
 from ccmux.claude_files import ClaudeSession
 from ccmux.event_log import CurrentClaudeBinding
-from ccmux.claude_state import ClaudeState
+from claude_code_state import ClaudeState
 from ccmux.claude_transcript_parser import ClaudeMessage
 from ccmux.tmux import TmuxWindow
 

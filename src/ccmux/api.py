@@ -26,14 +26,17 @@ from .backend import (
 
 # --- 2. Data types --------------------------------------------------------
 
-# State family (emitted via on_state)
-from .claude_state import (
-    BlockedUI,
+# State family + parser primitives — from external package
+from claude_code_state import (
     Blocked,
+    BlockedUI,
     ClaudeState,
     Dead,
     Idle,
+    InteractiveUIContent,
     Working,
+    extract_interactive_content,
+    parse_status_line,
 )
 
 # Message family (emitted via on_message)
@@ -53,23 +56,14 @@ from .event_log import (
     TmuxInfo,
 )
 
-# Parser data types
-from .tmux_pane_parser import InteractiveUIContent, UsageInfo
+# Bash / usage scrapers — backend-local
+from .pane_extras import UsageInfo, extract_bash_output, parse_usage_output
 
 # Query returns
 from .tmux import TmuxWindow
 
 # Composition inputs
 from .tmux import TmuxSessionRegistry
-
-# --- 3. Parsers -----------------------------------------------------------
-
-from .tmux_pane_parser import (
-    extract_bash_output,
-    extract_interactive_content,
-    parse_status_line,
-    parse_usage_output,
-)
 
 # --- 4. Composition helpers -----------------------------------------------
 
