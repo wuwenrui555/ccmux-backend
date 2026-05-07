@@ -116,7 +116,7 @@ async def test_backend_send_text_delegates_to_registry(tmp_path):
 async def test_fake_backend_satisfies_protocol():
     """FakeBackend conforms to the Backend structural Protocol."""
     from ccmux.backend import Backend
-    from ccmux.claude_state import Idle
+    from claude_code_state import Idle
 
     from tests.fake_backend import FakeBackend
 

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
 from .claude_files import ClaudeFileResolver, ClaudeSession, _encode_cwd
-from .claude_state import ClaudeState, Dead
+from claude_code_state import ClaudeState, Dead
 from .claude_transcript_parser import ClaudeMessage
 from .config import config
 from .event_log import CurrentClaudeBinding, EventLogReader

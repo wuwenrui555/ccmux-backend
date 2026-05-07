@@ -8,7 +8,7 @@ from typing import Any  # used in _FakeTmuxWithFallback below
 
 import pytest
 
-from ccmux.claude_state import (
+from claude_code_state import (
     Blocked,
     BlockedUI,
     ClaudeState,
