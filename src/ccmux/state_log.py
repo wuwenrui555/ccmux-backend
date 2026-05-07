@@ -21,11 +21,33 @@ import os
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Protocol, runtime_checkable
 
 from claude_code_state import ClaudeState
 
+from .util import atomic_write_json
+
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class StateObserver(Protocol):
+    """Common interface for any sink that wants per-tick state observations.
+
+    StateMonitor fans observations out to a tuple of these. Both StateLog
+    (corpus) and StateSnapshot (live) implement this Protocol.
+    """
+
+    async def record(
+        self,
+        *,
+        instance_id: str,
+        window_id: str,
+        pane_text: str,
+        state: ClaudeState,
+    ) -> None: ...
+
+    async def close(self) -> None: ...
 
 
 def _serialize_state(state: ClaudeState) -> dict[str, Any]:
@@ -148,3 +170,47 @@ class StateLog:
         )
         self._fh.write(line + "\n")
         self._fh.flush()
+
+
+class StateSnapshot:
+    """Atomic-rewrite JSON map of instance_id -> latest observation.
+
+    On every record() call:
+      1. Update the in-memory map for that instance_id.
+      2. Atomically rewrite the file (write tmp, rename).
+
+    pane_text is intentionally NOT stored: consumers that need raw pane
+    contents can run `tmux capture-pane` themselves; keeping the file small
+    keeps rewrite IO bounded.
+    """
+
+    def __init__(self, path: str | os.PathLike[str]) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._path = p
+        self._current: dict[str, dict[str, Any]] = {}
+        self._lock = asyncio.Lock()
+
+    async def record(
+        self,
+        *,
+        instance_id: str,
+        window_id: str,
+        pane_text: str,  # accepted for interface symmetry; deliberately ignored
+        state: ClaudeState,
+    ) -> None:
+        del pane_text  # not stored in the snapshot file
+        now = _utcnow()
+        async with self._lock:
+            self._current[instance_id] = {
+                "state": _serialize_state(state),
+                "window_id": window_id,
+                "last_seen": _iso(now),
+            }
+            atomic_write_json(self._path, self._current, indent=2)
+
+    async def close(self) -> None:
+        # No-op. The file is always at-rest after the most recent
+        # atomic_write_json. close() exists for StateObserver Protocol
+        # symmetry with StateLog.
+        return
