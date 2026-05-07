@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
@@ -27,6 +28,7 @@ from .claude_transcript_parser import ClaudeMessage
 from .config import config
 from .event_log import CurrentClaudeBinding, EventLogReader
 from .message_monitor import MessageMonitor
+from .state_log import StateLog
 from .state_monitor import StateMonitor, _claude_proc_names
 from .tmux import TmuxSessionRegistry, TmuxWindow
 
@@ -173,6 +175,14 @@ class _ClaudeOpsImpl:
         )
 
 
+def _build_state_log() -> StateLog | None:
+    """Return a StateLog if CCMUX_STATE_LOG_PATH is set and non-empty, else None."""
+    path = os.getenv("CCMUX_STATE_LOG_PATH", "").strip()
+    if not path:
+        return None
+    return StateLog(path)
+
+
 class DefaultBackend:
     """Default tmux-backed Backend.
 
@@ -215,6 +225,7 @@ class DefaultBackend:
         self._slow_task: asyncio.Task[None] | None = None
         self._resuming: set[str] = set()
         self._resume_failures: dict[str, int] = {}
+        self._state_log: StateLog | None = None
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
@@ -247,10 +258,12 @@ class DefaultBackend:
                 except Exception as e:
                     logger.warning("auto-resume failed for %s: %s", instance_id, e)
 
+        self._state_log = _build_state_log()
         state_monitor = StateMonitor(
             event_reader=self.event_reader,
             tmux_registry=self._tmux_registry,
             on_state=on_state_with_resume,
+            state_log=self._state_log,
         )
 
         async def fast_loop() -> None:
@@ -310,6 +323,13 @@ class DefaultBackend:
             self._message_monitor.shutdown()
         except Exception as e:
             logger.debug("message monitor shutdown error: %s", e)
+
+        if self._state_log is not None:
+            try:
+                await self._state_log.close()
+            except Exception as e:
+                logger.debug("state_log close error: %s", e)
+            self._state_log = None
 
     # --- Auto-resume -------------------------------------------------
 
