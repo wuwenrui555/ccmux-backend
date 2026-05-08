@@ -9,6 +9,34 @@ require a major bump.
 
 ## [Unreleased]
 
+## 5.2.0 — 2026-05-07
+
+### Added
+
+- `StateLog` (`ccmux.state_log`): append-only JSONL recorder for every
+  `(pane_text, ClaudeState)` observed in `fast_tick`. Adjacent ticks
+  with identical pane text for the same instance collapse into one
+  record with `first_seen` / `last_seen` / `tick_count`. Opt-in via
+  `CCMUX_STATE_LOG=1`; writes to `$CCMUX_DIR/state.jsonl` (default
+  `~/.ccmux/state.jsonl`). Built for offline parser-pattern mining
+  and regression testing of `claude_code_state.parse_pane`.
+- `StateSnapshot` (`ccmux.state_log`): atomic-rewrite JSON map of
+  `instance_id -> {state, window_id, last_seen}`. Opt-in via
+  `CCMUX_STATE_SNAPSHOT=1`; writes to
+  `$CCMUX_DIR/state_current.json`. Designed for live polling by
+  external monitoring tools; `pane_text` is intentionally excluded
+  to keep the file small and rewrite IO bounded.
+- `StateObserver` Protocol that both writers implement. `StateMonitor`
+  fans observations out to a tuple of observers, so a single
+  observer's failure is logged at `debug` and never blocks others.
+
+### Changed
+
+- `StateMonitor.__init__` now accepts
+  `observers: tuple[StateObserver, ...]` in place of the previous
+  `state_log` parameter. Internal change only; `ccmux.api` surface
+  is unchanged.
+
 ## 5.1.3 — 2026-05-07
 
 ### Changed
