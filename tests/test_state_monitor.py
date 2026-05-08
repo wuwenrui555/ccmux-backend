@@ -187,6 +187,190 @@ class TestClassification:
         assert seen == []
 
 
+class TestStateLogIntegration:
+    @pytest.mark.asyncio
+    async def test_fast_tick_calls_state_log_record(self, chrome: str) -> None:
+        from ccmux.state_log import StateLog  # noqa: F401  (import locality)
+
+        b = _binding()
+        pane = f"some output\n✽ Thinking… (3s)\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen_state: list[tuple[str, ClaudeState]] = []
+        recorded: list[dict[str, Any]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen_state.append((instance_id, state))
+
+        class _FakeStateLog:
+            async def record(
+                self,
+                *,
+                instance_id: str,
+                window_id: str,
+                pane_text: str,
+                state: ClaudeState,
+            ) -> None:
+                recorded.append(
+                    {
+                        "instance_id": instance_id,
+                        "window_id": window_id,
+                        "pane_text": pane_text,
+                        "state": state,
+                    }
+                )
+
+            async def close(self) -> None:
+                pass
+
+        mon = StateMonitor(
+            event_reader=reader,
+            tmux_registry=tmux,
+            on_state=on_state,
+            observers=(_FakeStateLog(),),
+        )
+        await mon.fast_tick()
+
+        assert len(recorded) == 1
+        assert recorded[0]["instance_id"] == "a"
+        assert recorded[0]["window_id"] == "@1"
+        assert recorded[0]["pane_text"] == pane
+        assert isinstance(recorded[0]["state"], Working)
+        # on_state still fires.
+        assert len(seen_state) == 1
+
+    @pytest.mark.asyncio
+    async def test_fast_tick_with_no_state_log_works_unchanged(
+        self, chrome: str
+    ) -> None:
+        b = _binding()
+        pane = f"output\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen: list[tuple[str, ClaudeState]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        # No observers argument — default is empty tuple.
+        mon = StateMonitor(event_reader=reader, tmux_registry=tmux, on_state=on_state)
+        await mon.fast_tick()
+        assert len(seen) == 1
+
+
+class TestStateObserverFanout:
+    @pytest.mark.asyncio
+    async def test_multiple_observers_all_called(self, chrome: str) -> None:
+        b = _binding()
+        pane = f"output\n✽ Thinking… (3s)\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen: list[tuple[str, ClaudeState]] = []
+        recorded_a: list[dict[str, Any]] = []
+        recorded_b: list[dict[str, Any]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        class _FakeObs:
+            def __init__(self, sink: list[dict[str, Any]]) -> None:
+                self._sink = sink
+
+            async def record(self, **kwargs: Any) -> None:
+                self._sink.append(kwargs)
+
+            async def close(self) -> None:
+                pass
+
+        mon = StateMonitor(
+            event_reader=reader,
+            tmux_registry=tmux,
+            on_state=on_state,
+            observers=(_FakeObs(recorded_a), _FakeObs(recorded_b)),
+        )
+        await mon.fast_tick()
+        assert len(recorded_a) == 1
+        assert len(recorded_b) == 1
+        assert recorded_a[0]["instance_id"] == recorded_b[0]["instance_id"] == "a"
+        assert len(seen) == 1
+
+    @pytest.mark.asyncio
+    async def test_one_observer_failure_does_not_block_others(
+        self, chrome: str
+    ) -> None:
+        b = _binding()
+        pane = f"output\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen: list[tuple[str, ClaudeState]] = []
+        recorded: list[dict[str, Any]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        class _BoomObs:
+            async def record(self, **kwargs: Any) -> None:
+                raise RuntimeError("simulated observer failure")
+
+            async def close(self) -> None:
+                pass
+
+        class _OkObs:
+            async def record(self, **kwargs: Any) -> None:
+                recorded.append(kwargs)
+
+            async def close(self) -> None:
+                pass
+
+        mon = StateMonitor(
+            event_reader=reader,
+            tmux_registry=tmux,
+            on_state=on_state,
+            observers=(_BoomObs(), _OkObs()),
+        )
+        await mon.fast_tick()
+        # _OkObs still got called even though _BoomObs raised.
+        assert len(recorded) == 1
+        # on_state still fired.
+        assert len(seen) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_observers_works_unchanged(self, chrome: str) -> None:
+        b = _binding()
+        pane = f"output\n{chrome}"
+        tmux = _FakeTmux(
+            panes={"@1": pane},
+            window_ids_present={"@1"},
+            pane_commands={"@1": "claude"},
+        )
+        reader = _FakeReader(bindings=[b])
+        seen: list[tuple[str, ClaudeState]] = []
+
+        async def on_state(instance_id: str, state: ClaudeState) -> None:
+            seen.append((instance_id, state))
+
+        # No observers argument — default empty tuple.
+        mon = StateMonitor(event_reader=reader, tmux_registry=tmux, on_state=on_state)
+        await mon.fast_tick()
+        assert len(seen) == 1
+
+
 class TestSkipRules:
     @pytest.mark.asyncio
     async def test_skip_when_window_missing(self) -> None:
