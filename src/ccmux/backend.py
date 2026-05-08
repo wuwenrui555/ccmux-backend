@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
@@ -27,8 +28,10 @@ from .claude_transcript_parser import ClaudeMessage
 from .config import config
 from .event_log import CurrentClaudeBinding, EventLogReader
 from .message_monitor import MessageMonitor
+from .state_log import StateLog, StateSnapshot
 from .state_monitor import StateMonitor, _claude_proc_names
 from .tmux import TmuxSessionRegistry, TmuxWindow
+from .util import ccmux_dir
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +176,27 @@ class _ClaudeOpsImpl:
         )
 
 
+_TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+
+
+def _truthy(raw: str) -> bool:
+    return raw.strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _build_state_observers() -> tuple:
+    """Build the state observer tuple from CCMUX_STATE_LOG / CCMUX_STATE_SNAPSHOT.
+
+    Returns observers in declared order: StateLog first (if enabled), then
+    StateSnapshot (if enabled). Empty tuple if both disabled.
+    """
+    observers: list = []
+    if _truthy(os.getenv("CCMUX_STATE_LOG", "")):
+        observers.append(StateLog(ccmux_dir() / "state.jsonl"))
+    if _truthy(os.getenv("CCMUX_STATE_SNAPSHOT", "")):
+        observers.append(StateSnapshot(ccmux_dir() / "state_current.json"))
+    return tuple(observers)
+
+
 class DefaultBackend:
     """Default tmux-backed Backend.
 
@@ -201,8 +225,6 @@ class DefaultBackend:
         self._tmux_registry = tmux_registry
 
         if event_reader is None:
-            from .util import ccmux_dir
-
             event_reader = EventLogReader(ccmux_dir() / "claude_events.jsonl")
         self.event_reader: EventLogReader = event_reader
 
@@ -215,6 +237,7 @@ class DefaultBackend:
         self._slow_task: asyncio.Task[None] | None = None
         self._resuming: set[str] = set()
         self._resume_failures: dict[str, int] = {}
+        self._state_observers: tuple = ()
 
         self.tmux: TmuxOps = _TmuxOpsImpl(tmux_registry)
         self.claude: ClaudeOps = _ClaudeOpsImpl(self._files)
@@ -247,10 +270,12 @@ class DefaultBackend:
                 except Exception as e:
                     logger.warning("auto-resume failed for %s: %s", instance_id, e)
 
+        self._state_observers = _build_state_observers()
         state_monitor = StateMonitor(
             event_reader=self.event_reader,
             tmux_registry=self._tmux_registry,
             on_state=on_state_with_resume,
+            observers=self._state_observers,
         )
 
         async def fast_loop() -> None:
@@ -310,6 +335,13 @@ class DefaultBackend:
             self._message_monitor.shutdown()
         except Exception as e:
             logger.debug("message monitor shutdown error: %s", e)
+
+        for obs in self._state_observers:
+            try:
+                await obs.close()
+            except Exception as e:
+                logger.debug("observer %s close error: %s", type(obs).__name__, e)
+        self._state_observers = ()
 
     # --- Auto-resume -------------------------------------------------
 

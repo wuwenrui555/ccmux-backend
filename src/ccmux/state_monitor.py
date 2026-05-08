@@ -28,6 +28,8 @@ from typing import Awaitable, Callable, TYPE_CHECKING
 
 from claude_code_state import ClaudeState, Dead, parse_pane
 
+from .state_log import StateObserver
+
 if TYPE_CHECKING:
     from .event_log import CurrentClaudeBinding, EventLogReader
     from .tmux import TmuxSessionRegistry
@@ -57,10 +59,12 @@ class StateMonitor:
         event_reader: "EventLogReader",
         tmux_registry: "TmuxSessionRegistry",
         on_state: OnStateCallback,
+        observers: "tuple[StateObserver, ...]" = (),
     ) -> None:
         self._event_reader = event_reader
         self._tmux_registry = tmux_registry
         self._on_state = on_state
+        self._observers = observers
 
     async def fast_tick(self) -> None:
         """Classify each live binding from its pane text; emit or skip.
@@ -89,8 +93,25 @@ class StateMonitor:
                     continue
                 # KeyboardInterrupt / SystemExit — propagate.
                 raise result
-            if result is not None:
-                await self._on_state(b.tmux_session_name, result)
+            if result is None:
+                continue
+            pane_text, state = result
+            for obs in self._observers:
+                try:
+                    await obs.record(
+                        instance_id=b.tmux_session_name,
+                        window_id=b.window_id,
+                        pane_text=pane_text,
+                        state=state,
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "observer %s record error for %s: %s",
+                        type(obs).__name__,
+                        b.tmux_session_name,
+                        e,
+                    )
+            await self._on_state(b.tmux_session_name, state)
 
     async def slow_tick(self) -> None:
         """Probe each binding's foreground process; emit Dead when needed.
@@ -119,8 +140,8 @@ class StateMonitor:
 
     async def _classify_from_pane(
         self, b: "CurrentClaudeBinding"
-    ) -> ClaudeState | None:
-        """Return a ClaudeState from pane text, or None to skip."""
+    ) -> tuple[str, ClaudeState] | None:
+        """Return (pane_text, ClaudeState) from pane text, or None to skip."""
         if not b.window_id:
             return None
         tm = self._tmux_registry.get_by_window_id(b.window_id)
@@ -132,7 +153,10 @@ class StateMonitor:
         pane_text = await tm.capture_pane(b.window_id)
         if not pane_text:
             return None
-        return parse_pane(pane_text)
+        state = parse_pane(pane_text)
+        if state is None:
+            return None
+        return pane_text, state
 
     async def _probe_dead(self, b: "CurrentClaudeBinding") -> bool:
         """True when the tmux window exists but the pane foreground is not claude."""
