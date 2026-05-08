@@ -7,17 +7,29 @@ from pathlib import Path
 
 import pytest
 
+from ccmux.backend import _build_state_observers
 from ccmux.state_log import StateLog, StateSnapshot
 
 
-class TestEnvVarToggles:
-    def test_both_unset_yields_empty_tuple(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("CCMUX_STATE_LOG", raising=False)
-        monkeypatch.delenv("CCMUX_STATE_SNAPSHOT", raising=False)
-        from ccmux.backend import _build_state_observers
+@pytest.fixture(autouse=True)
+def _clean_state_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip CCMUX_STATE_LOG / CCMUX_STATE_SNAPSHOT before every test.
 
+    Importing ``ccmux.backend`` triggers ``Config()`` at module load,
+    which calls ``load_dotenv`` on ``$CCMUX_DIR/settings.env`` and
+    injects whatever the user has there into ``os.environ``. This
+    fixture removes both toggles so each test starts from a known-off
+    baseline; tests that need a value set then call ``monkeypatch.setenv``
+    explicitly. Without this fixture, isolation runs of this file are
+    order-dependent on whatever the developer happened to put in their
+    settings.env.
+    """
+    monkeypatch.delenv("CCMUX_STATE_LOG", raising=False)
+    monkeypatch.delenv("CCMUX_STATE_SNAPSHOT", raising=False)
+
+
+class TestEnvVarToggles:
+    def test_both_unset_yields_empty_tuple(self) -> None:
         observers = _build_state_observers()
         try:
             assert observers == ()
@@ -30,8 +42,6 @@ class TestEnvVarToggles:
     ) -> None:
         monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
         monkeypatch.setenv("CCMUX_STATE_LOG", "1")
-        monkeypatch.delenv("CCMUX_STATE_SNAPSHOT", raising=False)
-        from ccmux.backend import _build_state_observers
 
         observers = _build_state_observers()
         try:
@@ -45,9 +55,7 @@ class TestEnvVarToggles:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
-        monkeypatch.delenv("CCMUX_STATE_LOG", raising=False)
         monkeypatch.setenv("CCMUX_STATE_SNAPSHOT", "1")
-        from ccmux.backend import _build_state_observers
 
         observers = _build_state_observers()
         try:
@@ -63,7 +71,6 @@ class TestEnvVarToggles:
         monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
         monkeypatch.setenv("CCMUX_STATE_LOG", "1")
         monkeypatch.setenv("CCMUX_STATE_SNAPSHOT", "1")
-        from ccmux.backend import _build_state_observers
 
         observers = _build_state_observers()
         try:
@@ -78,7 +85,6 @@ class TestEnvVarToggles:
         for value in ("", "   ", "0", "false", "no", "off", "garbage"):
             monkeypatch.setenv("CCMUX_STATE_LOG", value)
             monkeypatch.setenv("CCMUX_STATE_SNAPSHOT", value)
-            from ccmux.backend import _build_state_observers
 
             observers = _build_state_observers()
             try:
@@ -93,8 +99,6 @@ class TestEnvVarToggles:
         monkeypatch.setenv("CCMUX_DIR", str(tmp_path))
         for value in ("1", "true", "yes", "on", "TRUE", "On"):
             monkeypatch.setenv("CCMUX_STATE_LOG", value)
-            monkeypatch.delenv("CCMUX_STATE_SNAPSHOT", raising=False)
-            from ccmux.backend import _build_state_observers
 
             observers = _build_state_observers()
             try:
